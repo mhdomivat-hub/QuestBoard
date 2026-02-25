@@ -1,5 +1,6 @@
-﻿import Vapor
+import Vapor
 import Fluent
+import SQLKit
 
 final class User: Model, Content, @unchecked Sendable {
     static let schema = "users"
@@ -17,6 +18,7 @@ final class User: Model, Content, @unchecked Sendable {
     var role: Role
 
     enum Role: String, Codable {
+        case guest
         case member
         case admin
         case superAdmin
@@ -52,5 +54,16 @@ struct CreateUser: AsyncMigration {
     func revert(on database: Database) async throws {
         try await database.schema(User.schema).delete()
         try await database.enum("user_role").delete()
+    }
+}
+
+struct AddGuestRoleToUserRoleEnum: AsyncMigration {
+    func prepare(on database: Database) async throws {
+        guard let sql = database as? SQLDatabase else { return }
+        try await sql.raw("ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'guest'").run()
+    }
+
+    func revert(on database: Database) async throws {
+        // Enum value rollback is intentionally unsupported for safety.
     }
 }

@@ -49,6 +49,7 @@ export default function LoginPage() {
           <Button type="submit" variant="primary">Einloggen</Button>
         </form>
       </Card>
+      <p><a href="/register">Invite erhalten? Jetzt registrieren</a></p>
       <p><a href="/forgot-password">Passwort vergessen?</a></p>
       {error ? <p className="qb-error">{error}</p> : null}
     </main>

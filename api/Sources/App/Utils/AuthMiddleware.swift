@@ -40,7 +40,15 @@ func requireAdminOrSuperAdmin(_ req: Request) throws -> User {
     switch user.role {
     case .admin, .superAdmin:
         return user
-    case .member:
+    case .guest, .member:
         throw Abort(.forbidden)
     }
+}
+
+func requireSuperAdmin(_ req: Request) throws -> User {
+    let user = try requireAuthenticatedUser(req)
+    guard user.role == .superAdmin else {
+        throw Abort(.forbidden)
+    }
+    return user
 }

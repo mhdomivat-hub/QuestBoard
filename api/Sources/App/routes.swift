@@ -4,6 +4,7 @@ public func routes(_ app: Application) throws {
     app.get { _ in "QuestBoard API running" }
 
     app.post("auth", "login", use: login)
+    app.post("auth", "register-by-invite", use: registerByInvite)
     app.post("auth", "password-reset", "request", use: requestPasswordReset)
     app.post("auth", "password-reset", "confirm", use: confirmPasswordReset)
 
@@ -31,6 +32,12 @@ public func routes(_ app: Application) throws {
         admin.post("password-resets", ":requestID", "reject", use: rejectPasswordReset)
         admin.post("retention", "quests", "cleanup", use: cleanupOldQuests)
         admin.get("audit", "events", use: listAuditEvents)
+        admin.get("users", use: listAdminUsers)
+        admin.patch("users", ":userID", "role", use: updateUserRole)
+        admin.delete("users", ":userID", use: deleteAdminUser)
+        admin.get("invites", use: listInvites)
+        admin.post("invites", use: createInvite)
+        admin.patch("invites", ":inviteID", "revoke", use: revokeInvite)
         admin.get("data", "export", use: exportAllData)
         admin.get("data", "export", "manifest", use: exportDataManifest)
         admin.get("data", "export", ":section", use: exportDataSection)

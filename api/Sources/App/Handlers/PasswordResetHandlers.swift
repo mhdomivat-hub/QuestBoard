@@ -162,6 +162,14 @@ func confirmPasswordReset(_ req: Request) async throws -> Response {
         user.passwordHash = try hashPassword(body.newPassword)
         try await user.save(on: db)
 
+        guard let userID = user.id else {
+            throw Abort(.internalServerError)
+        }
+        // Invalidate all active sessions after password reset.
+        try await APIToken.query(on: db)
+            .filter(\.$user.$id == userID)
+            .delete()
+
         token.usedAt = now
         try await token.save(on: db)
 

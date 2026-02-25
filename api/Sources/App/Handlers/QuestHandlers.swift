@@ -103,6 +103,9 @@ func getQuest(_ req: Request) async throws -> QuestResponseDTO {
 
 func createQuest(_ req: Request) async throws -> QuestResponseDTO {
     let actor = try requireAuthenticatedUser(req)
+    if actor.role == .guest {
+        throw Abort(.forbidden, reason: "guest users are read-only")
+    }
     guard let sql = req.db as? SQLDatabase else {
         throw Abort(.internalServerError, reason: "SQL database unavailable")
     }

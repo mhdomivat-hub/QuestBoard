@@ -5,7 +5,7 @@ import Badge from "./_components/ui/Badge";
 import Card from "./_components/ui/Card";
 import { statusLabel } from "./_components/ui/statusLabels";
 
-type UserRole = "member" | "admin" | "superAdmin";
+type UserRole = "guest" | "member" | "admin" | "superAdmin";
 type QuestStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "ARCHIVED";
 
 type MeResponse = {

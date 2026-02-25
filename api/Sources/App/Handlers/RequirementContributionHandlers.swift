@@ -64,6 +64,9 @@ private func updateContributionInternal(
     noteProvided: Bool
 ) async throws -> ContributionResponseDTO {
     let user = try requireAuthenticatedUser(req)
+    if user.role == .guest {
+        throw Abort(.forbidden, reason: "guest users are read-only")
+    }
     guard let sql = req.db as? SQLDatabase else {
         throw Abort(.internalServerError, reason: "SQL database unavailable")
     }
@@ -293,6 +296,9 @@ func listContributionsForRequirement(_ req: Request) async throws -> [Contributi
 
 func createContribution(_ req: Request) async throws -> ContributionResponseDTO {
     let user = try requireAuthenticatedUser(req)
+    if user.role == .guest {
+        throw Abort(.forbidden, reason: "guest users are read-only")
+    }
     guard let sql = req.db as? SQLDatabase else {
         throw Abort(.internalServerError, reason: "SQL database unavailable")
     }

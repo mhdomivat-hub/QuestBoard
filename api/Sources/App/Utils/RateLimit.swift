@@ -18,12 +18,23 @@ actor SlidingWindowRateLimiter {
 
 let authRateLimiter = SlidingWindowRateLimiter()
 
+private let trustForwardedForForRateLimit = (Environment.get("TRUST_X_FORWARDED_FOR") ?? "false")
+    .lowercased() == "true"
+
+private func isValidIPToken(_ candidate: String) -> Bool {
+    let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return false }
+    let allowed = CharacterSet(charactersIn: "0123456789abcdefABCDEF:.")
+    return trimmed.unicodeScalars.allSatisfy { allowed.contains($0) }
+}
+
 private func clientIP(_ req: Request) -> String {
-    if let forwarded = req.headers.first(name: .xForwardedFor)?
+    if trustForwardedForForRateLimit,
+       let forwarded = req.headers.first(name: .xForwardedFor)?
         .split(separator: ",")
         .first?
         .trimmingCharacters(in: .whitespacesAndNewlines),
-       !forwarded.isEmpty {
+       isValidIPToken(forwarded) {
         return forwarded
     }
     return req.remoteAddress?.ipAddress ?? "unknown"
@@ -50,5 +61,13 @@ func enforcePasswordResetConfirmRateLimit(_ req: Request) async throws {
     let allowed = await authRateLimiter.allow(key: key, limit: 20, window: 60)
     if !allowed {
         throw Abort(.tooManyRequests, reason: "too many password reset confirmations")
+    }
+}
+
+func enforceInviteRegisterRateLimit(_ req: Request) async throws {
+    let key = "invite-register:\(clientIP(req))"
+    let allowed = await authRateLimiter.allow(key: key, limit: 20, window: 60)
+    if !allowed {
+        throw Abort(.tooManyRequests, reason: "too many invite registrations")
     }
 }

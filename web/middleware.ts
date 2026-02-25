@@ -5,6 +5,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://api:8080";
 
 const publicPages = new Set([
   "/login",
+  "/register",
   "/forgot-password",
   "/reset-password"
 ]);

@@ -13,6 +13,7 @@ public func configure(_ app: Application) throws {
     app.middleware.use(RequestContextMiddleware())
 
     app.migrations.add(CreateUser())
+    app.migrations.add(AddGuestRoleToUserRoleEnum())
     app.migrations.add(CreateAuditEvent())
     app.migrations.add(CreateAPIToken())
     app.migrations.add(CreateQuest())
@@ -24,6 +25,9 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddContributionDeliveredLock())
     app.migrations.add(CreatePasswordResetRequest())
     app.migrations.add(CreatePasswordResetToken())
+    app.migrations.add(CreateInvite())
+    app.migrations.add(AddInviteRawTokenField())
+    app.migrations.add(AddInviteUsageFields())
 
     try app.autoMigrate().wait()
     try app.eventLoopGroup.next().makeFutureWithTask {

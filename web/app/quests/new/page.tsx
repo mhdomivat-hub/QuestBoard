@@ -7,7 +7,7 @@ import { SelectInput, TextArea, TextInput } from "../../_components/ui/Input";
 import { statusLabel } from "../../_components/ui/statusLabels";
 
 type QuestStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "ARCHIVED";
-type UserRole = "member" | "admin" | "superAdmin";
+type UserRole = "guest" | "member" | "admin" | "superAdmin";
 
 const statuses: QuestStatus[] = ["OPEN", "IN_PROGRESS", "DONE", "ARCHIVED"];
 
@@ -24,7 +24,11 @@ export default function NewQuestPage() {
       const res = await fetch("/api/me", { cache: "no-store" });
       if (res.ok) {
         const me = await res.json();
-        setRole(me.role as UserRole);
+        const meRole = me.role as UserRole;
+        setRole(meRole);
+        if (meRole === "guest") {
+          window.location.href = "/quests";
+        }
       }
     }
     loadMe();

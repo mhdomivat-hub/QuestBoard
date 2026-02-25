@@ -718,6 +718,67 @@ try {
     Assert-HttpStatus -Label "Admin split import quest B exists" -Actual $splitQuestBGet.Status -Expected 200 -Body $splitQuestBGet.Body
     Write-Pass "Admin split import multi-payload validation OK"
 
+    Write-Step "INVITE FLOW: admin creates invite"
+    $inviteCreateBody = @{ role = "member"; expiresInHours = 24 } | ConvertTo-Json -Compress
+    $inviteCreate = Invoke-CurlJson -Method "POST" -Url "$base/api/admin/invites" -Body $inviteCreateBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Invite create" -Actual $inviteCreate.Status -Expected 200 -Body $inviteCreate.Body
+    $inviteCreateJson = Parse-JsonOrFail -Label "Invite create" -Body $inviteCreate.Body
+    if (-not $inviteCreateJson.token -or -not $inviteCreateJson.invite.id) {
+        Fail "Invite create response missing token/invite.id. Body: $($inviteCreate.Body)"
+    }
+    Write-Pass "Invite create OK"
+
+    Write-Step "INVITE FLOW: register user by invite token"
+    $inviteUserName = "InviteUser" + (Get-Date -Format "HHmmss")
+    $inviteUserPassword = "InviteUser!123"
+    $registerByInviteBody = @{
+        token = $inviteCreateJson.token
+        username = $inviteUserName
+        password = $inviteUserPassword
+    } | ConvertTo-Json -Compress
+    $registerByInvite = Invoke-CurlJson -Method "POST" -Url "$base/api/register-by-invite" -Body $registerByInviteBody -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Register by invite" -Actual $registerByInvite.Status -Expected 200 -Body $registerByInvite.Body
+    $registerByInviteJson = Parse-JsonOrFail -Label "Register by invite" -Body $registerByInvite.Body
+    if ($registerByInviteJson.username -ne $inviteUserName) {
+        Fail "Register by invite username mismatch. Body: $($registerByInvite.Body)"
+    }
+    Write-Pass "Register by invite OK"
+
+    Write-Step "INVITE FLOW: login with invited user"
+    $inviteLoginBody = @{ username = $inviteUserName; password = $inviteUserPassword } | ConvertTo-Json -Compress
+    $inviteLogin = Invoke-CurlJson -Method "POST" -Url "$base/api/login" -Body $inviteLoginBody -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Login with invited user" -Actual $inviteLogin.Status -Expected 200 -Body $inviteLogin.Body
+    Write-Pass "Invited user login OK"
+
+    Write-Step "USER ROLE FLOW: list admin users"
+    $adminUsers = Invoke-CurlJson -Method "GET" -Url "$base/api/admin/users" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Admin users list" -Actual $adminUsers.Status -Expected 200 -Body $adminUsers.Body
+    $adminUsersJson = Parse-JsonOrFail -Label "Admin users list" -Body $adminUsers.Body
+    $adminUsersArray = Ensure-ArrayOrFail -Label "Admin users list" -Value $adminUsersJson
+    $invitedUserFromList = $adminUsersArray | Where-Object { $_.username -eq $inviteUserName } | Select-Object -First 1
+    if ($null -eq $invitedUserFromList) {
+        Fail "Invited user not found in admin users list."
+    }
+
+    Write-Step "USER ROLE FLOW: promote invited user to admin"
+    $promoteBody = @{ role = "admin" } | ConvertTo-Json -Compress
+    $promoteRes = Invoke-CurlJson -Method "PATCH" -Url "$base/api/admin/users/$($invitedUserFromList.id)/role" -Body $promoteBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Promote user role" -Actual $promoteRes.Status -Expected 200 -Body $promoteRes.Body
+    $promoteJson = Parse-JsonOrFail -Label "Promote user role" -Body $promoteRes.Body
+    if ($promoteJson.role -ne "admin") {
+        Fail "Promote user role expected admin. Body: $($promoteRes.Body)"
+    }
+
+    Write-Step "USER ROLE FLOW: demote invited user back to member"
+    $demoteBody = @{ role = "member" } | ConvertTo-Json -Compress
+    $demoteRes = Invoke-CurlJson -Method "PATCH" -Url "$base/api/admin/users/$($invitedUserFromList.id)/role" -Body $demoteBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Demote user role" -Actual $demoteRes.Status -Expected 200 -Body $demoteRes.Body
+    $demoteJson = Parse-JsonOrFail -Label "Demote user role" -Body $demoteRes.Body
+    if ($demoteJson.role -ne "member") {
+        Fail "Demote user role expected member. Body: $($demoteRes.Body)"
+    }
+    Write-Pass "User role promote/demote OK"
+
     Write-Step "POST $base/api/admin/retention/quests/cleanup (dry run)"
     $cleanupBody = @{ dryRun = $true; olderThanDays = 365 } | ConvertTo-Json -Compress
     $cleanup = Invoke-CurlJson -Method "POST" -Url "$base/api/admin/retention/quests/cleanup" -Body $cleanupBody -CookieIn $cookieFile -TmpDir $tmpDir

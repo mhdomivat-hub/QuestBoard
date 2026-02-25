@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Button from "./ui/Button";
 
-const hideOnPaths = ["/login", "/forgot-password", "/reset-password"];
-type UserRole = "member" | "admin" | "superAdmin";
+const hideOnPaths = ["/login", "/register", "/forgot-password", "/reset-password"];
+type UserRole = "guest" | "member" | "admin" | "superAdmin";
 
 export default function AppNav() {
   const pathname = usePathname();

@@ -7,6 +7,7 @@ import Card from "../_components/ui/Card";
 import { statusLabel } from "../_components/ui/statusLabels";
 
 type QuestStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "ARCHIVED";
+type UserRole = "guest" | "member" | "admin" | "superAdmin";
 
 type Quest = {
   id: string;
@@ -21,6 +22,7 @@ function QuestsPageContent() {
   const searchParams = useSearchParams();
   const statusFilter = searchParams.get("status") as QuestStatus | null;
   const [quests, setQuests] = useState<Quest[]>([]);
+  const [role, setRole] = useState<UserRole | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function loadQuests() {
@@ -34,7 +36,15 @@ function QuestsPageContent() {
   }
 
   useEffect(() => {
-    loadQuests();
+    async function loadAll() {
+      const meRes = await fetch("/api/me", { cache: "no-store" });
+      if (meRes.ok) {
+        const me = await meRes.json();
+        setRole((me.role as UserRole | undefined) ?? null);
+      }
+      await loadQuests();
+    }
+    loadAll();
   }, []);
 
   const openCount = quests.filter((q) => q.status === "OPEN").length;
@@ -76,9 +86,11 @@ function QuestsPageContent() {
           <a href="/quests?status=ARCHIVED"><Badge label={`${statusLabel("ARCHIVED")} ${archivedCount}`} /></a>
           {activeFilter ? <a className="qb-nav-link" href="/quests">Filter zuruecksetzen</a> : null}
         </div>
-        <div className="qb-inline" style={{ marginTop: 10 }}>
-          <a href="/quests/new">Neue Quest erstellen</a>
-        </div>
+        {role && role !== "guest" ? (
+          <div className="qb-inline" style={{ marginTop: 10 }}>
+            <a href="/quests/new">Neue Quest erstellen</a>
+          </div>
+        ) : null}
       </Card>
 
       {error ? <p className="qb-error">{error}</p> : null}

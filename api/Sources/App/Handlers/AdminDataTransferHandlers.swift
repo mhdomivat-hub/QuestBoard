@@ -31,7 +31,7 @@ private func decodeOptionalString(_ row: SQLRow, column: String) throws -> Strin
 }
 
 func exportAllData(_ req: Request) async throws -> AdminDataExportDTO {
-    let actor = try requireAdminOrSuperAdmin(req)
+    let actor = try requireSuperAdmin(req)
     guard let sql = req.db as? SQLDatabase else {
         throw Abort(.internalServerError, reason: "SQL database unavailable")
     }
@@ -194,7 +194,7 @@ private func countAllRows(sql: SQLDatabase, table: String) async throws -> Int {
 }
 
 func exportDataManifest(_ req: Request) async throws -> AdminDataExportManifestDTO {
-    let _ = try requireAdminOrSuperAdmin(req)
+    let _ = try requireSuperAdmin(req)
     guard let sql = req.db as? SQLDatabase else {
         throw Abort(.internalServerError, reason: "SQL database unavailable")
     }
@@ -216,7 +216,7 @@ func exportDataManifest(_ req: Request) async throws -> AdminDataExportManifestD
 }
 
 func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
-    let _ = try requireAdminOrSuperAdmin(req)
+    let _ = try requireSuperAdmin(req)
     guard let sql = req.db as? SQLDatabase else {
         throw Abort(.internalServerError, reason: "SQL database unavailable")
     }
@@ -465,7 +465,7 @@ func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
 }
 
 func importAllData(_ req: Request) async throws -> AdminDataImportResultDTO {
-    let actor = try requireAdminOrSuperAdmin(req)
+    let actor = try requireSuperAdmin(req)
     let payload = try req.content.decode(AdminDataExportDTO.self)
     guard let sql = req.db as? SQLDatabase else {
         throw Abort(.internalServerError, reason: "SQL database unavailable")

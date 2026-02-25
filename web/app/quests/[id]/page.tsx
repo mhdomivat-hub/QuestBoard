@@ -9,7 +9,7 @@ import { SelectInput, TextInput } from "../../_components/ui/Input";
 import ProgressBar from "../../_components/ui/ProgressBar";
 import { statusLabel } from "../../_components/ui/statusLabels";
 
-type UserRole = "member" | "admin" | "superAdmin";
+type UserRole = "guest" | "member" | "admin" | "superAdmin";
 type QuestStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "ARCHIVED";
 type ContributionStatus = "CLAIMED" | "COLLECTED" | "DELIVERED" | "CANCELLED";
 
@@ -150,6 +150,10 @@ export default function QuestDetailPage() {
   async function createContribution(requirementId: string, e: FormEvent) {
     e.preventDefault();
     setError(null);
+    if (currentUserRole === "guest") {
+      setError("Gast-Accounts sind read-only.");
+      return;
+    }
 
     const qty = newContribQty[requirementId] ?? 1;
     const status = newContribStatus[requirementId] ?? "CLAIMED";
@@ -266,6 +270,7 @@ export default function QuestDetailPage() {
       .map((entry) => entry.req);
   }, [requirements]);
   const canAdmin = currentUserRole === "admin" || currentUserRole === "superAdmin";
+  const isGuest = currentUserRole === "guest";
   const canEditQuest = useMemo(() => {
     if (!quest) return false;
     if (quest.isApproved) return canAdmin;
@@ -371,35 +376,39 @@ export default function QuestDetailPage() {
             <p className="qb-muted">Gesammelt: {req.collectedQty} | Abgegeben: {req.deliveredQty} | Offen: {req.openQty}</p>
             {req.excessQty > 0 ? <p className="qb-muted">Zu viel geliefert: {req.excessQty} {req.unit}</p> : null}
 
-            <form onSubmit={(e) => createContribution(req.id, e)} className="qb-form">
-              <TextInput
-                type="number"
-                min={1}
-                value={newContribQty[req.id] ?? 1}
-                onChange={(e) => setNewContribQty((p) => ({ ...p, [req.id]: Number(e.target.value) }))}
-              />
-              <SelectInput
-                value={newContribStatus[req.id] ?? "CLAIMED"}
-                onChange={(e) => setNewContribStatus((p) => ({ ...p, [req.id]: e.target.value as ContributionStatus }))}
-              >
-                {contributionStatuses.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
-              </SelectInput>
-              <TextInput
-                placeholder="Note optional"
-                value={newContribNote[req.id] ?? ""}
-                onChange={(e) => setNewContribNote((p) => ({ ...p, [req.id]: e.target.value }))}
-              />
-              <Button type="submit" variant="primary">Beitrag eintragen</Button>
-            </form>
+            {isGuest ? (
+              <p className="qb-muted">Gast-Accounts koennen keine Beitraege erstellen oder bearbeiten.</p>
+            ) : (
+              <form onSubmit={(e) => createContribution(req.id, e)} className="qb-form">
+                <TextInput
+                  type="number"
+                  min={1}
+                  value={newContribQty[req.id] ?? 1}
+                  onChange={(e) => setNewContribQty((p) => ({ ...p, [req.id]: Number(e.target.value) }))}
+                />
+                <SelectInput
+                  value={newContribStatus[req.id] ?? "CLAIMED"}
+                  onChange={(e) => setNewContribStatus((p) => ({ ...p, [req.id]: e.target.value as ContributionStatus }))}
+                >
+                  {contributionStatuses.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
+                </SelectInput>
+                <TextInput
+                  placeholder="Note optional"
+                  value={newContribNote[req.id] ?? ""}
+                  onChange={(e) => setNewContribNote((p) => ({ ...p, [req.id]: e.target.value }))}
+                />
+                <Button type="submit" variant="primary">Beitrag eintragen</Button>
+              </form>
+            )}
 
             <div className="qb-grid">
               {visibleContributions.map((c) => (
                 <Card key={c.id}>
                   {(() => {
                     const isDelivered = c.status === "DELIVERED";
-                    const isOwner = c.userId === currentUserId;
+                    const isOwner = !isGuest && c.userId === currentUserId;
                     const isQuestCreator = quest?.createdByUserId != null && quest.createdByUserId === currentUserId;
-                    const canMarkDelivered = canAdmin || isQuestCreator;
+                    const canMarkDelivered = !isGuest && (canAdmin || isQuestCreator);
                     return (
                   <>
                   <div className="qb-inline" style={{ justifyContent: "space-between" }}>
