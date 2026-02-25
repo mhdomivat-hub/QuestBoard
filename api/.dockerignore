@@ -1,0 +1,5 @@
+.build
+.swiftpm
+.git
+.gitignore
+Package.resolved

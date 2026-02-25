@@ -1,0 +1,34 @@
+import Vapor
+import Fluent
+import FluentPostgresDriver
+
+public func configure(_ app: Application) throws {
+    guard let dbURL = Environment.get("DATABASE_URL") else {
+        app.logger.critical("DATABASE_URL missing")
+        throw Abort(.internalServerError, reason: "DATABASE_URL missing")
+    }
+
+    try app.databases.use(.postgres(url: dbURL), as: .psql)
+
+    app.middleware.use(RequestContextMiddleware())
+
+    app.migrations.add(CreateUser())
+    app.migrations.add(CreateAuditEvent())
+    app.migrations.add(CreateAPIToken())
+    app.migrations.add(CreateQuest())
+    app.migrations.add(AddQuestRetentionFields())
+    app.migrations.add(AddQuestApprovalFields())
+    app.migrations.add(MigrateQuestStatusToString())
+    app.migrations.add(CreateRequirement())
+    app.migrations.add(CreateContribution())
+    app.migrations.add(AddContributionDeliveredLock())
+    app.migrations.add(CreatePasswordResetRequest())
+    app.migrations.add(CreatePasswordResetToken())
+
+    try app.autoMigrate().wait()
+    try app.eventLoopGroup.next().makeFutureWithTask {
+        try await bootstrapInitialAdmin(app)
+    }.wait()
+
+    try routes(app)
+}

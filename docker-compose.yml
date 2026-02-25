@@ -1,0 +1,87 @@
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - questboard
+
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - questboard
+
+  api:
+    build:
+      context: ./api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      BCRYPT_COST: ${BCRYPT_COST}
+      API_TOKEN_TTL_HOURS: ${API_TOKEN_TTL_HOURS}
+      RESET_TOKEN_TTL_HOURS: ${RESET_TOKEN_TTL_HOURS}
+      APP_BASE_URL: ${APP_BASE_URL}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD}
+      BOOTSTRAP_MEMBER_USERNAME: ${BOOTSTRAP_MEMBER_USERNAME}
+      BOOTSTRAP_MEMBER_PASSWORD: ${BOOTSTRAP_MEMBER_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - questboard
+
+  web:
+    build:
+      context: ./web
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE}
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const h=process.env.HOSTNAME||'localhost';fetch('http://'+h+':3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - questboard
+
+volumes:
+  caddy_data:
+  caddy_config:
+  db_data:
+
+networks:
+  questboard:

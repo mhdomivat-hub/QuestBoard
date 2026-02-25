@@ -1,0 +1,15 @@
+﻿.env
+
+# Node
+web/node_modules
+web/.next
+
+# Swift
+api/.build
+api/.swiftpm
+
+# Mac/Windows
+.DS_Store
+Thumbs.db
+Caddyfile
+CaddyfileServer
