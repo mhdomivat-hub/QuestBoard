@@ -196,6 +196,23 @@ a:hover {
   align-items: center;
 }
 
+.qb-footer {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.qb-footer-link {
+  color: var(--text-muted);
+}
+
+.qb-footer-link:hover {
+  color: var(--text-silver);
+}
+
 @media (max-width: 768px) {
   .qb-shell {
     padding: 14px;
