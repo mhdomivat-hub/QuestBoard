@@ -3,11 +3,15 @@ import { NextRequest, NextResponse } from "next/server";
 const COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "qb_token";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://api:8080";
 
-const publicPages = new Set([
+const authPages = new Set([
   "/login",
   "/register",
   "/forgot-password",
-  "/reset-password",
+  "/reset-password"
+]);
+
+const publicPages = new Set([
+  ...authPages,
   "/datenschutz",
   "/impressum"
 ]);
@@ -30,7 +34,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (token && isPublicPage) {
+  if (token && authPages.has(pathname)) {
     const url = req.nextUrl.clone();
     url.pathname = "/";
     url.searchParams.delete("next");
