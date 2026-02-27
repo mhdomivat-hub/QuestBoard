@@ -4,6 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Badge from "../_components/ui/Badge";
 import Card from "../_components/ui/Card";
+import ProgressBar from "../_components/ui/ProgressBar";
 import { statusLabel } from "../_components/ui/statusLabels";
 
 type QuestStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "ARCHIVED";
@@ -18,10 +19,23 @@ type Quest = {
   createdAt?: string;
 };
 
+type RequirementProgress = {
+  qtyNeeded: number;
+  collectedQty: number;
+  deliveredQty: number;
+};
+
+type QuestProgress = {
+  totalNeeded: number;
+  delivered: number;
+  collectedPending: number;
+};
+
 function QuestsPageContent() {
   const searchParams = useSearchParams();
   const statusFilter = searchParams.get("status") as QuestStatus | null;
   const [quests, setQuests] = useState<Quest[]>([]);
+  const [questProgress, setQuestProgress] = useState<Record<string, QuestProgress>>({});
   const [role, setRole] = useState<UserRole | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +46,32 @@ function QuestsPageContent() {
       setError(`Load failed (${res.status})`);
       return;
     }
-    setQuests(await res.json());
+    const list = (await res.json()) as Quest[];
+    setQuests(list);
+
+    const entries = await Promise.all(
+      list.map(async (quest) => {
+        try {
+          const reqRes = await fetch(`/api/quests/${quest.id}/requirements`, { cache: "no-store" });
+          if (!reqRes.ok) {
+            return [quest.id, { totalNeeded: 0, delivered: 0, collectedPending: 0 }] as const;
+          }
+          const reqs = (await reqRes.json()) as RequirementProgress[];
+          const totalNeeded = reqs.reduce((sum, req) => sum + req.qtyNeeded, 0);
+          const delivered = reqs.reduce((sum, req) => sum + Math.min(req.deliveredQty, req.qtyNeeded), 0);
+          const collectedPending = reqs.reduce((sum, req) => {
+            const cappedDelivered = Math.min(req.deliveredQty, req.qtyNeeded);
+            const pending = Math.max(Math.min(req.collectedQty, req.qtyNeeded) - cappedDelivered, 0);
+            return sum + pending;
+          }, 0);
+          return [quest.id, { totalNeeded, delivered, collectedPending }] as const;
+        } catch {
+          return [quest.id, { totalNeeded: 0, delivered: 0, collectedPending: 0 }] as const;
+        }
+      })
+    );
+
+    setQuestProgress(Object.fromEntries(entries));
   }
 
   useEffect(() => {
@@ -107,6 +146,26 @@ function QuestsPageContent() {
               </div>
             </div>
             {!q.isApproved ? <p className="qb-muted">Freigabe ausstehend</p> : null}
+            {(() => {
+              const progress = questProgress[q.id] ?? { totalNeeded: 0, delivered: 0, collectedPending: 0 };
+              const hasRequirements = progress.totalNeeded > 0;
+              if (!hasRequirements) {
+                return <p className="qb-muted">Keine Requirements</p>;
+              }
+              return (
+                <div style={{ marginBottom: 8 }}>
+                  <ProgressBar
+                    value={progress.delivered}
+                    secondaryValue={progress.collectedPending}
+                    max={progress.totalNeeded}
+                  />
+                  <p className="qb-muted">
+                    Fortschritt: {progress.delivered}/{progress.totalNeeded} abgegeben |{" "}
+                    {progress.collectedPending}/{progress.totalNeeded} gesammelt
+                  </p>
+                </div>
+              );
+            })()}
             <p className="qb-muted">{q.description}</p>
             <a href={`/quests/${q.id}`}>Details oeffnen</a>
           </Card>

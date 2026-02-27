@@ -3,7 +3,7 @@ export const STATUS_LABELS: Record<string, string> = {
   IN_PROGRESS: "Bearbeitung",
   DONE: "Fertig",
   ARCHIVED: "Archiviert",
-  CLAIMED: "Beschafft",
+  CLAIMED: "In Beschaffung",
   COLLECTED: "Gesammelt",
   DELIVERED: "Abgegeben",
   CANCELLED: "Abgebrochen",

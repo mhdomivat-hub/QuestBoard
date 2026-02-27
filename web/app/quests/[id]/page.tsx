@@ -258,6 +258,15 @@ export default function QuestDetailPage() {
     () => requirements.reduce((sum, req) => sum + Math.min(req.deliveredQty, req.qtyNeeded), 0),
     [requirements]
   );
+  const totalCollectedPendingForProgress = useMemo(
+    () =>
+      requirements.reduce((sum, req) => {
+        const delivered = Math.min(req.deliveredQty, req.qtyNeeded);
+        const collectedPending = Math.max(Math.min(req.collectedQty, req.qtyNeeded) - delivered, 0);
+        return sum + collectedPending;
+      }, 0),
+    [requirements]
+  );
   const sortedRequirements = useMemo(() => {
     return requirements
       .map((req, index) => ({ req, index }))
@@ -302,8 +311,15 @@ export default function QuestDetailPage() {
             </div>
           ) : null}
           <div style={{ marginTop: 8 }}>
-            <ProgressBar value={totalDeliveredForProgress} max={totalNeeded} />
-            <p className="qb-muted">Gesamtfortschritt: {totalDeliveredForProgress}/{totalNeeded} abgegeben</p>
+            <ProgressBar
+              value={totalDeliveredForProgress}
+              secondaryValue={totalCollectedPendingForProgress}
+              max={totalNeeded}
+            />
+            <p className="qb-muted">
+              Gesamtfortschritt: {totalDeliveredForProgress}/{totalNeeded} abgegeben |{" "}
+              {totalCollectedPendingForProgress}/{totalNeeded} gesammelt (noch nicht abgegeben)
+            </p>
           </div>
           {requirements.length > 0 ? (
             <div className="qb-grid">
@@ -313,7 +329,11 @@ export default function QuestDetailPage() {
                     <span>{req.itemName}</span>
                     <span className="qb-muted">{req.deliveredQty}/{req.qtyNeeded} {req.unit} abgegeben</span>
                   </div>
-                  <ProgressBar value={Math.min(req.deliveredQty, req.qtyNeeded)} max={req.qtyNeeded} />
+                  <ProgressBar
+                    value={Math.min(req.deliveredQty, req.qtyNeeded)}
+                    secondaryValue={Math.max(Math.min(req.collectedQty, req.qtyNeeded) - Math.min(req.deliveredQty, req.qtyNeeded), 0)}
+                    max={req.qtyNeeded}
+                  />
                 </div>
               ))}
             </div>
@@ -372,7 +392,11 @@ export default function QuestDetailPage() {
               <strong>{req.itemName}</strong>
               <span>{req.deliveredQty}/{req.qtyNeeded} {req.unit}</span>
             </div>
-            <ProgressBar value={Math.min(req.deliveredQty, req.qtyNeeded)} max={req.qtyNeeded} />
+            <ProgressBar
+              value={Math.min(req.deliveredQty, req.qtyNeeded)}
+              secondaryValue={Math.max(Math.min(req.collectedQty, req.qtyNeeded) - Math.min(req.deliveredQty, req.qtyNeeded), 0)}
+              max={req.qtyNeeded}
+            />
             <p className="qb-muted">Gesammelt: {req.collectedQty} | Abgegeben: {req.deliveredQty} | Offen: {req.openQty}</p>
             {req.excessQty > 0 ? <p className="qb-muted">Zu viel geliefert: {req.excessQty} {req.unit}</p> : null}
 

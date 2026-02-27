@@ -165,11 +165,20 @@ a:hover {
   background: #15191f;
   border: 1px solid var(--border-subtle);
   overflow: hidden;
+  display: flex;
+}
+
+.qb-progress-segment {
+  height: 100%;
 }
 
 .qb-progress-bar {
   height: 100%;
   background: linear-gradient(90deg, var(--accent-gold) 0%, var(--accent-gold-hover) 100%);
+}
+
+.qb-progress-bar-secondary {
+  background: linear-gradient(90deg, rgba(199, 205, 214, 0.52) 0%, rgba(199, 205, 214, 0.72) 100%);
 }
 
 .qb-muted {
