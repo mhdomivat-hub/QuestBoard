@@ -14,6 +14,7 @@ const statuses: QuestStatus[] = ["OPEN", "IN_PROGRESS", "DONE", "ARCHIVED"];
 export default function NewQuestPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [handoverInfo, setHandoverInfo] = useState("");
   const [status, setStatus] = useState<QuestStatus>("OPEN");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -43,8 +44,8 @@ export default function NewQuestPage() {
 
     try {
       const payload = canAdmin
-        ? { title, description, status }
-        : { title, description, status: "OPEN" };
+        ? { title, description, handoverInfo: handoverInfo || null, status }
+        : { title, description, handoverInfo: handoverInfo || null, status: "OPEN" };
 
       const res = await fetch("/api/quests", {
         method: "POST",
@@ -78,6 +79,11 @@ export default function NewQuestPage() {
         <form onSubmit={createQuest} className="qb-form">
           <TextInput placeholder="Titel" value={title} onChange={(e) => setTitle(e.target.value)} required />
           <TextArea placeholder="Beschreibung" value={description} onChange={(e) => setDescription(e.target.value)} rows={4} required />
+          <TextInput
+            placeholder="Abzugeben bei (Wo und bei wem)"
+            value={handoverInfo}
+            onChange={(e) => setHandoverInfo(e.target.value)}
+          />
           {canAdmin ? (
             <SelectInput value={status} onChange={(e) => setStatus(e.target.value as QuestStatus)}>
               {statuses.map((s) => (

@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import Badge from "../../_components/ui/Badge";
 import Button from "../../_components/ui/Button";
 import Card from "../../_components/ui/Card";
-import { SelectInput, TextInput } from "../../_components/ui/Input";
+import { SelectInput, TextArea, TextInput } from "../../_components/ui/Input";
 import ProgressBar from "../../_components/ui/ProgressBar";
 import { statusLabel } from "../../_components/ui/statusLabels";
 
@@ -17,6 +17,7 @@ type Quest = {
   id: string;
   title: string;
   description: string;
+  handoverInfo?: string | null;
   status: QuestStatus;
   createdByUserId?: string | null;
   createdByUsername?: string | null;
@@ -60,6 +61,10 @@ export default function QuestDetailPage() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRole, setCurrentUserRole] = useState<UserRole | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editHandoverInfo, setEditHandoverInfo] = useState("");
+  const [savingQuestDetails, setSavingQuestDetails] = useState(false);
 
   const [newReqItem, setNewReqItem] = useState("");
   const [newReqQty, setNewReqQty] = useState(1);
@@ -76,7 +81,11 @@ export default function QuestDetailPage() {
   async function loadQuest() {
     const res = await fetch(`/api/quests/${questId}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`Quest load failed (${res.status})`);
-    setQuest(await res.json());
+    const loaded = (await res.json()) as Quest;
+    setQuest(loaded);
+    setEditTitle(loaded.title ?? "");
+    setEditDescription(loaded.description ?? "");
+    setEditHandoverInfo(loaded.handoverInfo ?? "");
   }
 
   async function loadMe() {
@@ -250,6 +259,31 @@ export default function QuestDetailPage() {
     await refreshAll();
   }
 
+  async function updateQuestDetails(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSavingQuestDetails(true);
+    try {
+      const res = await fetch(`/api/quests/${questId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: editTitle,
+          description: editDescription,
+          handoverInfo: editHandoverInfo || null
+        })
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        setError(`Quest-Details speichern fehlgeschlagen (${res.status}) ${txt}`);
+        return;
+      }
+      await refreshAll();
+    } finally {
+      setSavingQuestDetails(false);
+    }
+  }
+
   const totalNeeded = useMemo(
     () => requirements.reduce((sum, req) => sum + req.qtyNeeded, 0),
     [requirements]
@@ -285,6 +319,12 @@ export default function QuestDetailPage() {
     if (quest.isApproved) return canAdmin;
     return canAdmin || quest.createdByUserId === currentUserId;
   }, [quest, canAdmin, currentUserId]);
+  const canEditQuestDetails = useMemo(() => {
+    if (!quest) return false;
+    if (canAdmin) return true;
+    return quest.createdByUserId === currentUserId && !quest.isApproved && quest.status === "OPEN";
+  }, [quest, canAdmin, currentUserId]);
+  const detailsEditMode = editMode;
 
   return (
     <main className="qb-main">
@@ -299,17 +339,6 @@ export default function QuestDetailPage() {
               <Badge label={quest.status} />
             </div>
           </div>
-          <p className="qb-muted">Erstellt von: {quest.createdByUsername ?? quest.createdByUserId ?? "Unbekannt"}</p>
-          {!quest.isApproved ? (
-            <p className="qb-muted">Diese Quest wartet auf Freigabe durch einen Admin.</p>
-          ) : (
-            <p className="qb-muted">Freigegeben</p>
-          )}
-          {!quest.isApproved && canAdmin ? (
-            <div className="qb-inline">
-              <Button type="button" variant="primary" onClick={approveQuest}>Quest freigeben</Button>
-            </div>
-          ) : null}
           <div style={{ marginTop: 8 }}>
             <ProgressBar
               value={totalDeliveredForProgress}
@@ -321,6 +350,44 @@ export default function QuestDetailPage() {
               {totalCollectedPendingForProgress}/{totalNeeded} gesammelt (noch nicht abgegeben)
             </p>
           </div>
+          <p className="qb-muted">Erstellt von: {quest.createdByUsername ?? quest.createdByUserId ?? "Unbekannt"}</p>
+          {!quest.isApproved ? (
+            <p className="qb-muted">Diese Quest wartet auf Freigabe durch einen Admin.</p>
+          ) : null}
+          {!quest.isApproved && canAdmin ? (
+            <div className="qb-inline">
+              <Button type="button" variant="primary" onClick={approveQuest}>Quest freigeben</Button>
+            </div>
+          ) : null}
+          {!detailsEditMode ? <p className="qb-muted">{quest.description}</p> : null}
+          {!detailsEditMode ? (
+            <p className="qb-muted">Abzugeben bei: {quest.handoverInfo?.trim() ? quest.handoverInfo : "Nicht gesetzt"}</p>
+          ) : null}
+          {canEditQuestDetails && detailsEditMode ? (
+            <form onSubmit={updateQuestDetails} className="qb-form" style={{ marginTop: 8 }}>
+              <TextInput
+                placeholder="Titel"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                required
+              />
+              <TextInput
+                placeholder="Abzugeben bei (Wo und bei wem)"
+                value={editHandoverInfo}
+                onChange={(e) => setEditHandoverInfo(e.target.value)}
+              />
+              <TextArea
+                placeholder="Beschreibung"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                rows={4}
+                required
+              />
+              <Button type="submit" variant="primary" disabled={savingQuestDetails}>
+                {savingQuestDetails ? "Speichert..." : "Quest-Details speichern"}
+              </Button>
+            </form>
+          ) : null}
           {requirements.length > 0 ? (
             <div className="qb-grid">
               {sortedRequirements.map((req) => (
@@ -338,17 +405,15 @@ export default function QuestDetailPage() {
               ))}
             </div>
           ) : null}
-          <p className="qb-muted">{quest.description}</p>
           {canEditQuest ? (
-            <div className="qb-inline" style={{ marginBottom: 8 }}>
+            <div className="qb-inline" style={{ marginTop: 12, marginBottom: 8, gap: 12 }}>
               <Button type="button" variant={editMode ? "primary" : "secondary"} onClick={() => setEditMode((v) => !v)}>
                 {editMode ? "Bearbeitungsmodus beenden" : "Bearbeitungsmodus"}
               </Button>
-              {editMode ? <span className="qb-muted">Bearbeitungsmodus aktiv</span> : null}
             </div>
           ) : null}
           {canEditQuest ? (
-            <div className="qb-inline">
+            <div className="qb-inline" style={{ gap: 12 }}>
               {questStatuses.map((s) => (
                 <Button key={s} type="button" onClick={() => updateQuestStatus(s)} disabled={quest.status === s}>
                   {statusLabel(s)}

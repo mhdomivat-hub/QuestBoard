@@ -5,6 +5,7 @@ struct QuestAccessContext {
     let id: UUID
     let createdByUserId: UUID?
     let isApproved: Bool
+    let status: String
 }
 
 func isAdminRole(_ role: User.Role) -> Bool {
@@ -27,9 +28,17 @@ func canEditQuest(user: User, quest: QuestAccessContext) -> Bool {
     return isAdminRole(user.role) || quest.createdByUserId == userId
 }
 
+func canEditQuestDetails(user: User, quest: QuestAccessContext) -> Bool {
+    guard let userId = user.id else { return false }
+    if isAdminRole(user.role) {
+        return true
+    }
+    return quest.createdByUserId == userId && !quest.isApproved && quest.status == Quest.Status.open.rawValue
+}
+
 func loadQuestAccessContext(sql: SQLDatabase, questID: UUID) async throws -> QuestAccessContext? {
     let rows = try await sql.raw("""
-        SELECT id, created_by_user_id, is_approved
+        SELECT id, created_by_user_id, is_approved, status
         FROM quests
         WHERE id = \(bind: questID)
         LIMIT 1
@@ -41,5 +50,6 @@ func loadQuestAccessContext(sql: SQLDatabase, questID: UUID) async throws -> Que
         ? nil
         : row.decode(column: "created_by_user_id", as: UUID.self)
     let isApproved: Bool = try row.decode(column: "is_approved", as: Bool.self)
-    return .init(id: id, createdByUserId: createdByUserId, isApproved: isApproved)
+    let status: String = try row.decode(column: "status", as: String.self)
+    return .init(id: id, createdByUserId: createdByUserId, isApproved: isApproved, status: status)
 }

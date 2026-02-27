@@ -3,11 +3,18 @@ import Vapor
 struct QuestCreateDTO: Content {
     let title: String
     let description: String
+    let handoverInfo: String?
     let status: String?
 }
 
 struct QuestStatusUpdateDTO: Content {
     let status: String
+}
+
+struct QuestUpdateDTO: Content {
+    let title: String
+    let description: String
+    let handoverInfo: String?
 }
 
 struct QuestRetentionCleanupRequestDTO: Content {
@@ -27,6 +34,7 @@ struct QuestResponseDTO: Content {
     let id: UUID
     let title: String
     let description: String
+    let handoverInfo: String?
     let status: String
     let createdAt: Date?
     let createdByUserId: UUID?

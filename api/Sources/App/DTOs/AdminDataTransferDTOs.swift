@@ -60,6 +60,7 @@ struct AdminExportQuestDTO: Content {
     let id: UUID
     let title: String
     let description: String
+    let handoverInfo: String?
     let status: String
     let terminalSinceAt: Date?
     let deletedAt: Date?

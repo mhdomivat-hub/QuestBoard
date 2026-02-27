@@ -38,7 +38,7 @@ func exportAllData(_ req: Request) async throws -> AdminDataExportDTO {
 
     let userRows = try await sql.raw("SELECT id, username, password_hash, role FROM users ORDER BY username ASC").all()
     let questRows = try await sql.raw("""
-        SELECT id, title, description, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id
+        SELECT id, title, description, handover_info, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id
         FROM quests
         ORDER BY created_at ASC NULLS LAST, id ASC
         """).all()
@@ -87,6 +87,7 @@ func exportAllData(_ req: Request) async throws -> AdminDataExportDTO {
                 id: try $0.decode(column: "id", as: UUID.self),
                 title: try $0.decode(column: "title", as: String.self),
                 description: try $0.decode(column: "description", as: String.self),
+                handoverInfo: try decodeOptionalString($0, column: "handover_info"),
                 status: try $0.decode(column: "status", as: String.self),
                 terminalSinceAt: try decodeOptionalDate($0, column: "terminal_since_at"),
                 deletedAt: try decodeOptionalDate($0, column: "deleted_at"),
@@ -256,7 +257,7 @@ func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
         )
     case "quests":
         let rows = try await sql.raw("""
-            SELECT id, title, description, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id
+            SELECT id, title, description, handover_info, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id
             FROM quests
             ORDER BY created_at ASC NULLS LAST, id ASC
             LIMIT \(bind: limit) OFFSET \(bind: offset)
@@ -270,6 +271,7 @@ func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
                     id: try $0.decode(column: "id", as: UUID.self),
                     title: try $0.decode(column: "title", as: String.self),
                     description: try $0.decode(column: "description", as: String.self),
+                    handoverInfo: try decodeOptionalString($0, column: "handover_info"),
                     status: try $0.decode(column: "status", as: String.self),
                     terminalSinceAt: try decodeOptionalDate($0, column: "terminal_since_at"),
                     deletedAt: try decodeOptionalDate($0, column: "deleted_at"),
@@ -520,9 +522,9 @@ func importAllData(_ req: Request) async throws -> AdminDataImportResultDTO {
             continue
         }
         try await sql.raw("""
-            INSERT INTO quests (id, title, description, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id)
+            INSERT INTO quests (id, title, description, handover_info, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id)
             VALUES (
-                \(bind: item.id), \(bind: item.title), \(bind: item.description), \(bind: item.status),
+                \(bind: item.id), \(bind: item.title), \(bind: item.description), \(bind: item.handoverInfo), \(bind: item.status),
                 \(bind: item.terminalSinceAt), \(bind: item.deletedAt), \(bind: item.createdAt), \(bind: item.createdByUserId),
                 \(bind: item.isApproved), \(bind: item.approvedAt), \(bind: item.approvedByUserId)
             )

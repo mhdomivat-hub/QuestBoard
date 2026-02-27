@@ -19,6 +19,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateQuest())
     app.migrations.add(AddQuestRetentionFields())
     app.migrations.add(AddQuestApprovalFields())
+    app.migrations.add(AddQuestHandoverInfoField())
     app.migrations.add(MigrateQuestStatusToString())
     app.migrations.add(CreateRequirement())
     app.migrations.add(CreateContribution())

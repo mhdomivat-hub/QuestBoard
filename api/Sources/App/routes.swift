@@ -15,6 +15,7 @@ public func routes(_ app: Application) throws {
     authed.get("quests", use: listQuests)
     authed.get("quests", ":questID", use: getQuest)
     authed.post("quests", use: createQuest)
+    authed.patch("quests", ":questID", use: updateQuestDetails)
     authed.post("quests", ":questID", "approve", use: approveQuest)
     authed.patch("quests", ":questID", "status", use: updateQuestStatus)
     authed.patch("quests", ":questID", "delete", use: markQuestDeleted)

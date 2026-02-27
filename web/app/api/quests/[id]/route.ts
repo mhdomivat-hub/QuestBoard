@@ -19,3 +19,41 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     headers: { "Content-Type": "application/json" }
   });
 }
+
+export async function PATCH(_req: Request, { params }: { params: { id: string } }) {
+  const token = cookies().get(COOKIE_NAME)?.value;
+  if (!token) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  const res = await fetch(`${API_BASE}/quests/${params.id}/delete`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+  const text = await res.text();
+  return new NextResponse(text, {
+    status: res.status,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
+export async function PUT(req: Request, { params }: { params: { id: string } }) {
+  const token = cookies().get(COOKIE_NAME)?.value;
+  if (!token) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  const payload = await req.json();
+
+  const res = await fetch(`${API_BASE}/quests/${params.id}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const text = await res.text();
+  return new NextResponse(text, {
+    status: res.status,
+    headers: { "Content-Type": "application/json" }
+  });
+}

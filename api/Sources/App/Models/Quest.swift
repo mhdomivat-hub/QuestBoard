@@ -27,6 +27,9 @@ final class Quest: Model, Content, @unchecked Sendable {
     @Field(key: "description")
     var description: String
 
+    @OptionalField(key: "handover_info")
+    var handoverInfo: String?
+
     @Field(key: "status")
     var status: String
 
@@ -41,10 +44,11 @@ final class Quest: Model, Content, @unchecked Sendable {
 
     init() {}
 
-    init(id: UUID? = nil, title: String, description: String, status: String = Status.open.rawValue) {
+    init(id: UUID? = nil, title: String, description: String, handoverInfo: String? = nil, status: String = Status.open.rawValue) {
         self.id = id
         self.title = title
         self.description = description
+        self.handoverInfo = handoverInfo
         self.status = status
     }
 }
@@ -97,6 +101,20 @@ struct AddQuestApprovalFields: AsyncMigration {
             .deleteField("approved_at")
             .deleteField("is_approved")
             .deleteField("created_by_user_id")
+            .update()
+    }
+}
+
+struct AddQuestHandoverInfoField: AsyncMigration {
+    func prepare(on database: Database) async throws {
+        try await database.schema(Quest.schema)
+            .field("handover_info", .string)
+            .update()
+    }
+
+    func revert(on database: Database) async throws {
+        try await database.schema(Quest.schema)
+            .deleteField("handover_info")
             .update()
     }
 }

@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Badge from "../_components/ui/Badge";
+import Button from "../_components/ui/Button";
 import Card from "../_components/ui/Card";
 import ProgressBar from "../_components/ui/ProgressBar";
 import { statusLabel } from "../_components/ui/statusLabels";
@@ -33,11 +34,11 @@ type QuestProgress = {
 
 function QuestsPageContent() {
   const searchParams = useSearchParams();
-  const statusFilter = searchParams.get("status") as QuestStatus | null;
   const [quests, setQuests] = useState<Quest[]>([]);
   const [questProgress, setQuestProgress] = useState<Record<string, QuestProgress>>({});
   const [role, setRole] = useState<UserRole | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
 
   async function loadQuests() {
     setError(null);
@@ -86,15 +87,41 @@ function QuestsPageContent() {
     loadAll();
   }, []);
 
+  async function deleteQuest(questId: string) {
+    if (!confirm("Quest wirklich dauerhaft loeschen? Die archivierte Quest wird komplett aus der Datenbank entfernt.")) {
+      return;
+    }
+    setError(null);
+    setDeleteBusyId(questId);
+    try {
+      const res = await fetch(`/api/quests/${questId}`, { method: "PATCH" });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        setError(`Quest loeschen fehlgeschlagen (${res.status}) ${body}`);
+        return;
+      }
+      await loadQuests();
+    } finally {
+      setDeleteBusyId(null);
+    }
+  }
+
   const openCount = quests.filter((q) => q.status === "OPEN").length;
   const inProgressCount = quests.filter((q) => q.status === "IN_PROGRESS").length;
   const doneCount = quests.filter((q) => q.status === "DONE").length;
   const archivedCount = quests.filter((q) => q.status === "ARCHIVED").length;
   const validStatuses: QuestStatus[] = ["OPEN", "IN_PROGRESS", "DONE", "ARCHIVED"];
-  const activeFilter = statusFilter && validStatuses.includes(statusFilter) ? statusFilter : null;
+  const explicitStatusFilters = searchParams
+    .getAll("status")
+    .filter((status): status is QuestStatus => validStatuses.includes(status as QuestStatus));
+  const hasExplicitFilters = explicitStatusFilters.length > 0;
+  const activeFilters: QuestStatus[] = hasExplicitFilters
+    ? Array.from(new Set(explicitStatusFilters))
+    : ["OPEN", "IN_PROGRESS"];
 
   const filteredQuests = useMemo(() => {
-    const byFilter = activeFilter ? quests.filter((q) => q.status === activeFilter) : quests;
+    const filterSet = new Set(activeFilters);
+    const byFilter = quests.filter((q) => filterSet.has(q.status));
     const statusOrder: Record<QuestStatus, number> = {
       OPEN: 0,
       IN_PROGRESS: 1,
@@ -110,7 +137,33 @@ function QuestsPageContent() {
       if (statusDelta !== 0) return statusDelta;
       return a.title.localeCompare(b.title);
     });
-  }, [quests, activeFilter]);
+  }, [quests, activeFilters]);
+
+  const filterHref = (status: QuestStatus) => {
+    const params = new URLSearchParams(searchParams.toString());
+    const nextSet = new Set(activeFilters);
+    if (nextSet.has(status)) {
+      nextSet.delete(status);
+    } else {
+      nextSet.add(status);
+    }
+
+    params.delete("status");
+    const defaultSet = new Set<QuestStatus>(["OPEN", "IN_PROGRESS"]);
+    const isDefaultSelection =
+      nextSet.size === defaultSet.size && [...defaultSet].every((s) => nextSet.has(s));
+
+    if (!isDefaultSelection && nextSet.size > 0) {
+      for (const s of validStatuses) {
+        if (nextSet.has(s)) {
+          params.append("status", s);
+        }
+      }
+    }
+
+    const qs = params.toString();
+    return qs.length > 0 ? `/quests?${qs}` : "/quests";
+  };
 
   return (
     <main className="qb-main">
@@ -119,11 +172,27 @@ function QuestsPageContent() {
       <Card>
         <h2 className="qb-card-title">Dashboard</h2>
         <div className="qb-inline">
-          <a href="/quests?status=OPEN"><Badge label={`${statusLabel("OPEN")} ${openCount}`} /></a>
-          <a href="/quests?status=IN_PROGRESS"><Badge label={`${statusLabel("IN_PROGRESS")} ${inProgressCount}`} /></a>
-          <a href="/quests?status=DONE"><Badge label={`${statusLabel("DONE")} ${doneCount}`} /></a>
-          <a href="/quests?status=ARCHIVED"><Badge label={`${statusLabel("ARCHIVED")} ${archivedCount}`} /></a>
-          {activeFilter ? <a className="qb-nav-link" href="/quests">Filter zuruecksetzen</a> : null}
+          <a href={filterHref("OPEN")}>
+            <Button type="button" variant={activeFilters.includes("OPEN") ? "primary" : "secondary"}>
+              {statusLabel("OPEN")} {openCount}
+            </Button>
+          </a>
+          <a href={filterHref("IN_PROGRESS")}>
+            <Button type="button" variant={activeFilters.includes("IN_PROGRESS") ? "primary" : "secondary"}>
+              {statusLabel("IN_PROGRESS")} {inProgressCount}
+            </Button>
+          </a>
+          <a href={filterHref("DONE")}>
+            <Button type="button" variant={activeFilters.includes("DONE") ? "primary" : "secondary"}>
+              {statusLabel("DONE")} {doneCount}
+            </Button>
+          </a>
+          <a href={filterHref("ARCHIVED")}>
+            <Button type="button" variant={activeFilters.includes("ARCHIVED") ? "primary" : "secondary"}>
+              {statusLabel("ARCHIVED")} {archivedCount}
+            </Button>
+          </a>
+          {hasExplicitFilters ? <a className="qb-nav-link" href="/quests">Filter zuruecksetzen</a> : null}
         </div>
         {role && role !== "guest" ? (
           <div className="qb-inline" style={{ marginTop: 10 }}>
@@ -133,7 +202,6 @@ function QuestsPageContent() {
       </Card>
 
       {error ? <p className="qb-error">{error}</p> : null}
-      {activeFilter ? <p className="qb-muted">Aktiver Filter: {statusLabel(activeFilter)}</p> : null}
 
       <section className="qb-grid">
         {filteredQuests.map((q) => (
@@ -167,7 +235,19 @@ function QuestsPageContent() {
               );
             })()}
             <p className="qb-muted">{q.description}</p>
-            <a href={`/quests/${q.id}`}>Details oeffnen</a>
+            <div className="qb-inline" style={{ justifyContent: "space-between" }}>
+              <a href={`/quests/${q.id}`}>Details oeffnen</a>
+              {(role === "admin" || role === "superAdmin") && q.status === "ARCHIVED" ? (
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={deleteBusyId === q.id}
+                  onClick={() => deleteQuest(q.id)}
+                >
+                  {deleteBusyId === q.id ? "Loesche..." : "Loeschen"}
+                </Button>
+              ) : null}
+            </div>
           </Card>
         ))}
         {!error && filteredQuests.length === 0 ? <p className="qb-muted">Keine Quests fuer den gewaehlten Filter.</p> : null}
