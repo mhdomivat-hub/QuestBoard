@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Badge from "../_components/ui/Badge";
 import Button from "../_components/ui/Button";
 import Card from "../_components/ui/Card";
-import ProgressBar from "../_components/ui/ProgressBar";
+import ProgressWithLegend from "../_components/ui/ProgressWithLegend";
 import { statusLabel } from "../_components/ui/statusLabels";
 
 type QuestStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "ARCHIVED";
@@ -222,15 +222,12 @@ function QuestsPageContent() {
               }
               return (
                 <div style={{ marginBottom: 8 }}>
-                  <ProgressBar
-                    value={progress.delivered}
-                    secondaryValue={progress.collectedPending}
+                  <ProgressWithLegend
+                    delivered={progress.delivered}
+                    collectedPending={progress.collectedPending}
+                    remaining={Math.max(progress.totalNeeded - progress.delivered - progress.collectedPending, 0)}
                     max={progress.totalNeeded}
                   />
-                  <p className="qb-muted">
-                    Fortschritt: {progress.delivered}/{progress.totalNeeded} abgegeben |{" "}
-                    {progress.collectedPending}/{progress.totalNeeded} gesammelt
-                  </p>
                 </div>
               );
             })()}

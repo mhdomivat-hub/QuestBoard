@@ -181,6 +181,37 @@ a:hover {
   background: linear-gradient(90deg, rgba(199, 205, 214, 0.52) 0%, rgba(199, 205, 214, 0.72) 100%);
 }
 
+.qb-progress-legend {
+  display: flex;
+  align-items: center;
+  margin-top: 4px;
+  min-height: 16px;
+}
+
+.qb-progress-legend-item {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qb-progress-legend-delivered {
+  color: var(--accent-gold);
+}
+
+.qb-progress-legend-collected {
+  color: var(--text-silver);
+}
+
+.qb-progress-legend-open {
+  color: var(--text-muted);
+}
+
 .qb-muted {
   color: var(--text-muted);
 }

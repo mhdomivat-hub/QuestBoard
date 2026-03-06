@@ -6,7 +6,7 @@ import Badge from "../../_components/ui/Badge";
 import Button from "../../_components/ui/Button";
 import Card from "../../_components/ui/Card";
 import { SelectInput, TextArea, TextInput } from "../../_components/ui/Input";
-import ProgressBar from "../../_components/ui/ProgressBar";
+import ProgressWithLegend from "../../_components/ui/ProgressWithLegend";
 import { statusLabel } from "../../_components/ui/statusLabels";
 
 type UserRole = "guest" | "member" | "admin" | "superAdmin";
@@ -319,12 +319,32 @@ export default function QuestDetailPage() {
     if (quest.isApproved) return canAdmin;
     return canAdmin || quest.createdByUserId === currentUserId;
   }, [quest, canAdmin, currentUserId]);
+  const isQuestClosed = quest?.status === "DONE" || quest?.status === "ARCHIVED";
   const canEditQuestDetails = useMemo(() => {
     if (!quest) return false;
     if (canAdmin) return true;
     return quest.createdByUserId === currentUserId && !quest.isApproved && quest.status === "OPEN";
   }, [quest, canAdmin, currentUserId]);
   const detailsEditMode = editMode;
+  const deliveredParticipants = useMemo(() => {
+    const byUser = new Map<string, { username: string; totalQty: number }>();
+    for (const reqContribs of Object.values(contributions)) {
+      for (const c of reqContribs) {
+        if (c.status !== "DELIVERED") continue;
+        const key = c.userId;
+        const existing = byUser.get(key);
+        if (existing) {
+          existing.totalQty += c.qty;
+        } else {
+          byUser.set(key, { username: c.username, totalQty: c.qty });
+        }
+      }
+    }
+    return [...byUser.values()].sort((a, b) => {
+      if (b.totalQty !== a.totalQty) return b.totalQty - a.totalQty;
+      return a.username.localeCompare(b.username, "de-DE");
+    });
+  }, [contributions]);
 
   return (
     <main className="qb-main">
@@ -340,15 +360,12 @@ export default function QuestDetailPage() {
             </div>
           </div>
           <div style={{ marginTop: 8 }}>
-            <ProgressBar
-              value={totalDeliveredForProgress}
-              secondaryValue={totalCollectedPendingForProgress}
+            <ProgressWithLegend
+              delivered={totalDeliveredForProgress}
+              collectedPending={totalCollectedPendingForProgress}
+              remaining={Math.max(totalNeeded - totalDeliveredForProgress - totalCollectedPendingForProgress, 0)}
               max={totalNeeded}
             />
-            <p className="qb-muted">
-              Gesamtfortschritt: {totalDeliveredForProgress}/{totalNeeded} abgegeben |{" "}
-              {totalCollectedPendingForProgress}/{totalNeeded} gesammelt (noch nicht abgegeben)
-            </p>
           </div>
           <p className="qb-muted">Erstellt von: {quest.createdByUsername ?? quest.createdByUserId ?? "Unbekannt"}</p>
           {!quest.isApproved ? (
@@ -390,19 +407,27 @@ export default function QuestDetailPage() {
           ) : null}
           {requirements.length > 0 ? (
             <div className="qb-grid">
-              {sortedRequirements.map((req) => (
-                <div key={req.id}>
-                  <div className="qb-inline" style={{ justifyContent: "space-between" }}>
-                    <span>{req.itemName}</span>
-                    <span className="qb-muted">{req.deliveredQty}/{req.qtyNeeded} {req.unit} abgegeben</span>
+              {sortedRequirements.map((req) => {
+                const deliveredForProgress = Math.min(req.deliveredQty, req.qtyNeeded);
+                const collectedForProgress = Math.min(req.collectedQty, req.qtyNeeded);
+                const collectedPending = Math.max(collectedForProgress - deliveredForProgress, 0);
+                const remaining = Math.max(req.qtyNeeded - collectedForProgress, 0);
+
+                return (
+                  <div key={req.id}>
+                    <div className="qb-inline" style={{ justifyContent: "space-between" }}>
+                      <span>{req.itemName}</span>
+                      <span className="qb-muted">{deliveredForProgress}/{req.qtyNeeded} {req.unit} abgegeben</span>
+                    </div>
+                    <ProgressWithLegend
+                      delivered={deliveredForProgress}
+                      collectedPending={collectedPending}
+                      remaining={remaining}
+                      max={req.qtyNeeded}
+                    />
                   </div>
-                  <ProgressBar
-                    value={Math.min(req.deliveredQty, req.qtyNeeded)}
-                    secondaryValue={Math.max(Math.min(req.collectedQty, req.qtyNeeded) - Math.min(req.deliveredQty, req.qtyNeeded), 0)}
-                    max={req.qtyNeeded}
-                  />
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : null}
           {canEditQuest ? (
@@ -440,12 +465,34 @@ export default function QuestDetailPage() {
 
       {error ? <p className="qb-error">{error}</p> : null}
 
+      {isQuestClosed ? (
+        <section className="qb-grid">
+          <Card>
+            <h2 className="qb-card-title">Danke an</h2>
+            {deliveredParticipants.length === 0 ? (
+              <p className="qb-muted">Keine abgegebenen Beitraege vorhanden.</p>
+            ) : (
+              <div className="qb-grid" style={{ gap: 6 }}>
+                {deliveredParticipants.map((participant) => (
+                  <div key={participant.username} className="qb-inline" style={{ justifyContent: "space-between" }}>
+                    <strong>{participant.username}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </section>
+      ) : (
       <section className="qb-grid">
         {sortedRequirements.map((req) => {
           const reqContributions = contributions[req.id] ?? [];
           const openContributions = reqContributions.filter(
             (c) => c.status === "CLAIMED" || c.status === "COLLECTED"
           );
+          const deliveredForProgress = Math.min(req.deliveredQty, req.qtyNeeded);
+          const collectedForProgress = Math.min(req.collectedQty, req.qtyNeeded);
+          const collectedPending = Math.max(collectedForProgress - deliveredForProgress, 0);
+          const remaining = Math.max(req.qtyNeeded - collectedForProgress, 0);
           const defaultVisibleContributions = openContributions.slice(-3);
           const isExpanded = expandedContributions[req.id] ?? false;
           const visibleContributions = isExpanded ? reqContributions : defaultVisibleContributions;
@@ -455,14 +502,17 @@ export default function QuestDetailPage() {
           <Card key={req.id}>
             <div className="qb-inline" style={{ justifyContent: "space-between" }}>
               <strong>{req.itemName}</strong>
-              <span>{req.deliveredQty}/{req.qtyNeeded} {req.unit}</span>
+              <span>{deliveredForProgress}/{req.qtyNeeded} {req.unit} abgegeben</span>
             </div>
-            <ProgressBar
-              value={Math.min(req.deliveredQty, req.qtyNeeded)}
-              secondaryValue={Math.max(Math.min(req.collectedQty, req.qtyNeeded) - Math.min(req.deliveredQty, req.qtyNeeded), 0)}
+            <ProgressWithLegend
+              delivered={deliveredForProgress}
+              collectedPending={collectedPending}
+              remaining={remaining}
               max={req.qtyNeeded}
             />
-            <p className="qb-muted">Gesammelt: {req.collectedQty} | Abgegeben: {req.deliveredQty} | Offen: {req.openQty}</p>
+            <p className="qb-muted">
+              {deliveredForProgress}/{req.qtyNeeded} {req.unit} abgegeben | {collectedPending} gesammelt | {remaining} offen
+            </p>
             {req.excessQty > 0 ? <p className="qb-muted">Zu viel geliefert: {req.excessQty} {req.unit}</p> : null}
 
             {isGuest ? (
@@ -594,6 +644,7 @@ export default function QuestDetailPage() {
           );
         })}
       </section>
+      )}
     </main>
   );
 }
