@@ -45,6 +45,14 @@ func requireAdminOrSuperAdmin(_ req: Request) throws -> User {
     }
 }
 
+func requireNonGuestUser(_ req: Request) throws -> User {
+    let user = try requireAuthenticatedUser(req)
+    guard user.role != .guest else {
+        throw Abort(.forbidden)
+    }
+    return user
+}
+
 func requireSuperAdmin(_ req: Request) throws -> User {
     let user = try requireAuthenticatedUser(req)
     guard user.role == .superAdmin else {

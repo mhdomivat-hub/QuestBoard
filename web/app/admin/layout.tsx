@@ -33,6 +33,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <a className="qb-nav-link" href="/admin/invites">Invites</a>
         <a className="qb-nav-link" href="/admin/password-resets">Password Resets</a>
         <a className="qb-nav-link" href="/admin/retention">Retention</a>
+        <a className="qb-nav-link" href="/admin/quest-templates">Quest Templates</a>
         <a className="qb-nav-link" href="/admin/audit">Audit Log</a>
         {isSuperAdmin ? <a className="qb-nav-link" href="/admin/data-transfer">Data Transfer</a> : null}
       </nav>

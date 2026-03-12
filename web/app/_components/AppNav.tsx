@@ -34,8 +34,10 @@ export default function AppNav() {
 
   return (
     <nav className="qb-nav">
-      <a className="qb-nav-link" href="/">Home</a>
       <a className="qb-nav-link" href="/quests">Quests</a>
+      {role !== "guest" ? <a className="qb-nav-link" href="/">Home</a> : null}
+      {role !== "guest" ? <a className="qb-nav-link" href="/blueprints">Blueprints</a> : null}
+      {role !== "guest" ? <a className="qb-nav-link" href="/account">Account</a> : null}
       {role === "admin" || role === "superAdmin" ? (
         <a className="qb-nav-link" href="/admin/password-resets">Admin</a>
       ) : null}

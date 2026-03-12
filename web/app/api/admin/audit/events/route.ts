@@ -24,3 +24,25 @@ export async function GET(req: Request) {
     headers: { "Content-Type": "application/json" }
   });
 }
+
+export async function DELETE() {
+  const token = cookies().get(COOKIE_NAME)?.value;
+  if (!token) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  const res = await fetch(`${API_BASE}/admin/audit/events`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+  if (res.status === 204) {
+    return new NextResponse(null, { status: 204 });
+  }
+
+  const body = await res.text();
+  return new NextResponse(body, {
+    status: res.status,
+    headers: { "Content-Type": "application/json" }
+  });
+}

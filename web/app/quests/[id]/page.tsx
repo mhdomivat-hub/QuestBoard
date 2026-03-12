@@ -284,6 +284,20 @@ export default function QuestDetailPage() {
     }
   }
 
+  async function createTemplateFromQuest() {
+    setError(null);
+    const res = await fetch(`/api/quests/${questId}/template`, {
+      method: "POST"
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      setError(`Template aus Quest erstellen fehlgeschlagen (${res.status}) ${txt}`);
+      return;
+    }
+    const created = (await res.json()) as { id: string };
+    window.location.href = `/admin/quest-templates/${created.id}`;
+  }
+
   const totalNeeded = useMemo(
     () => requirements.reduce((sum, req) => sum + req.qtyNeeded, 0),
     [requirements]
@@ -435,6 +449,11 @@ export default function QuestDetailPage() {
               <Button type="button" variant={editMode ? "primary" : "secondary"} onClick={() => setEditMode((v) => !v)}>
                 {editMode ? "Bearbeitungsmodus beenden" : "Bearbeitungsmodus"}
               </Button>
+              {canAdmin ? (
+                <Button type="button" variant="secondary" onClick={createTemplateFromQuest}>
+                  Als Template speichern
+                </Button>
+              ) : null}
             </div>
           ) : null}
           {canEditQuest ? (
