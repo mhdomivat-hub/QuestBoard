@@ -132,9 +132,8 @@ export default function QuestDetailPage() {
   async function createRequirement(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    const canAdmin = currentUserRole === "admin" || currentUserRole === "superAdmin";
-    if (!canAdmin) {
-      setError("Forbidden (admin only)");
+    if (!canEditQuest) {
+      setError("Requirement-Erstellung hier nicht erlaubt.");
       return;
     }
 
