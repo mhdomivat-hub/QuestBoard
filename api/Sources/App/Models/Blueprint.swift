@@ -139,14 +139,24 @@ struct AddBlueprintUnifiedCategory: AsyncMigration {
 
 struct AddBlueprintBadgesField: AsyncMigration {
     func prepare(on database: Database) async throws {
-        try await database.schema(Blueprint.schema)
-            .field("badges_csv", .string)
-            .update()
+        guard let sql = database as? SQLDatabase else {
+            try await database.schema(Blueprint.schema)
+                .field("badges_csv", .string)
+                .update()
+            return
+        }
+
+        try await sql.raw("ALTER TABLE \"\(unsafeRaw: Blueprint.schema)\" ADD COLUMN IF NOT EXISTS \"badges_csv\" TEXT").run()
     }
 
     func revert(on database: Database) async throws {
-        try await database.schema(Blueprint.schema)
-            .deleteField("badges_csv")
-            .update()
+        guard let sql = database as? SQLDatabase else {
+            try await database.schema(Blueprint.schema)
+                .deleteField("badges_csv")
+                .update()
+            return
+        }
+
+        try await sql.raw("ALTER TABLE \"\(unsafeRaw: Blueprint.schema)\" DROP COLUMN IF EXISTS \"badges_csv\"").run()
     }
 }
