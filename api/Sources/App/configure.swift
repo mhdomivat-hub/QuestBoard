@@ -26,9 +26,17 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddContributionDeliveredLock())
     app.migrations.add(CreatePasswordResetRequest())
     app.migrations.add(CreatePasswordResetToken())
+    app.migrations.add(CreateUsernameChangeRequest())
     app.migrations.add(CreateInvite())
     app.migrations.add(AddInviteRawTokenField())
     app.migrations.add(AddInviteUsageFields())
+    app.migrations.add(CreateBlueprint())
+    app.migrations.add(AddBlueprintTopLevelCategories())
+    app.migrations.add(AddBlueprintUnifiedCategory())
+    app.migrations.add(AddBlueprintBadgesField())
+    app.migrations.add(CreateBlueprintCrafter())
+    app.migrations.add(CreateQuestTemplate())
+    app.migrations.add(CreateQuestTemplateRequirement())
 
     try app.autoMigrate().wait()
     try app.eventLoopGroup.next().makeFutureWithTask {
@@ -37,3 +45,4 @@ public func configure(_ app: Application) throws {
 
     try routes(app)
 }
+

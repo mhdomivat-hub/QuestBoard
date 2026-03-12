@@ -116,6 +116,7 @@ export default function HomePage() {
               <div className="qb-grid">
                 <a className="qb-nav-link" href="/quests">Quest Uebersicht</a>
                 {canAdmin ? <a className="qb-nav-link" href="/quests/new">Neue Quest erstellen</a> : null}
+                {canAdmin ? <a className="qb-nav-link" href="/admin/quest-templates">Admin: Quest Templates</a> : null}
                 {canAdmin ? <a className="qb-nav-link" href="/admin/retention">Admin: Retention</a> : null}
                 {canAdmin ? <a className="qb-nav-link" href="/admin/audit">Admin: Audit Log</a> : null}
               </div>

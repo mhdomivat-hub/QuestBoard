@@ -16,6 +16,16 @@ const publicPages = new Set([
   "/impressum"
 ]);
 
+const guestAllowedPaths = new Set([
+  "/quests",
+  "/datenschutz",
+  "/impressum"
+]);
+
+function isGuestAllowedPath(pathname: string) {
+  return guestAllowedPaths.has(pathname) || pathname.startsWith("/quests/");
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -58,12 +68,40 @@ export async function middleware(req: NextRequest) {
       const me = (await res.json()) as { role?: string };
       if (me.role !== "admin" && me.role !== "superAdmin") {
         const url = req.nextUrl.clone();
-        url.pathname = "/";
+        url.pathname = "/quests";
         return NextResponse.redirect(url);
       }
     } catch {
       const url = req.nextUrl.clone();
-      url.pathname = "/";
+      url.pathname = "/quests";
+      return NextResponse.redirect(url);
+    }
+  }
+
+  if (token && !pathname.startsWith("/admin")) {
+    try {
+      const res = await fetch(`${API_BASE}/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store"
+      });
+
+      if (!res.ok) {
+        const url = req.nextUrl.clone();
+        url.pathname = "/login";
+        url.searchParams.set("next", pathname);
+        return NextResponse.redirect(url);
+      }
+
+      const me = (await res.json()) as { role?: string };
+      if (me.role === "guest" && !isGuestAllowedPath(pathname)) {
+        const url = req.nextUrl.clone();
+        url.pathname = "/quests";
+        url.searchParams.delete("next");
+        return NextResponse.redirect(url);
+      }
+    } catch {
+      const url = req.nextUrl.clone();
+      url.pathname = "/quests";
       return NextResponse.redirect(url);
     }
   }

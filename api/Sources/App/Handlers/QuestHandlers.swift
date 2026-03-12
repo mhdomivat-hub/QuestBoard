@@ -4,7 +4,7 @@ import SQLKit
 
 private let terminalQuestStatuses: Set<String> = [Quest.Status.done.rawValue, Quest.Status.archived.rawValue]
 
-private func questFromRow(_ row: SQLRow) throws -> QuestResponseDTO {
+func questFromRow(_ row: SQLRow) throws -> QuestResponseDTO {
     let id: UUID = try row.decode(column: "id", as: UUID.self)
     let title: String = try row.decode(column: "title", as: String.self)
     let description: String = try row.decode(column: "description", as: String.self)

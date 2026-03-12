@@ -745,17 +745,98 @@ try {
     Write-Pass "Register by invite OK"
 
     Write-Step "INVITE FLOW: login with invited user"
+    $inviteCookieFile = Join-Path $tmpDir "invite-cookies.txt"
     $inviteLoginBody = @{ username = $inviteUserName; password = $inviteUserPassword } | ConvertTo-Json -Compress
-    $inviteLogin = Invoke-CurlJson -Method "POST" -Url "$base/api/login" -Body $inviteLoginBody -TmpDir $tmpDir
+    $inviteLogin = Invoke-CurlJson -Method "POST" -Url "$base/api/login" -Body $inviteLoginBody -CookieOut $inviteCookieFile -TmpDir $tmpDir
     Assert-HttpStatus -Label "Login with invited user" -Actual $inviteLogin.Status -Expected 200 -Body $inviteLogin.Body
+    $inviteLoginJson = Parse-JsonOrFail -Label "Login with invited user" -Body $inviteLogin.Body
     Write-Pass "Invited user login OK"
+
+    Write-Step "ACCOUNT FLOW: invited user reads own account"
+    $inviteAccount = Invoke-CurlJson -Method "GET" -Url "$base/api/account" -CookieIn $inviteCookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Invited user account" -Actual $inviteAccount.Status -Expected 200 -Body $inviteAccount.Body
+    $inviteAccountJson = Parse-JsonOrFail -Label "Invited user account" -Body $inviteAccount.Body
+    if ($inviteAccountJson.username -ne $inviteUserName) {
+        Fail "Invited user account returned unexpected username. Body: $($inviteAccount.Body)"
+    }
+    Write-Pass "Invited user account OK"
+
+    $renamedInviteUserName = "$inviteUserName-renamed"
+    Write-Step "ACCOUNT FLOW: invited user requests username change"
+    $usernameChangeRequestBody = @{ desiredUsername = $renamedInviteUserName } | ConvertTo-Json -Compress
+    $usernameChangeRequest = Invoke-CurlJson -Method "POST" -Url "$base/api/account/username-change-requests" -Body $usernameChangeRequestBody -CookieIn $inviteCookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Username change request create" -Actual $usernameChangeRequest.Status -Expected 200 -Body $usernameChangeRequest.Body
+    $usernameChangeRequestJson = Parse-JsonOrFail -Label "Username change request create" -Body $usernameChangeRequest.Body
+    if ($usernameChangeRequestJson.desiredUsername -ne $renamedInviteUserName -or $usernameChangeRequestJson.status -ne "PENDING") {
+        Fail "Username change request response mismatch. Body: $($usernameChangeRequest.Body)"
+    }
+    Write-Pass "Username change request create OK"
+
+    if ($meJson.role -eq "superAdmin") {
+        Write-Step "ACCOUNT FLOW: superAdmin lists pending username change requests"
+        $pendingUsernameRequests = Invoke-CurlJson -Method "GET" -Url "$base/api/admin/username-change-requests/pending" -CookieIn $cookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Pending username change requests" -Actual $pendingUsernameRequests.Status -Expected 200 -Body $pendingUsernameRequests.Body
+        $pendingUsernameRequestsJson = Parse-JsonOrFail -Label "Pending username change requests" -Body $pendingUsernameRequests.Body
+        $pendingUsernameRequestsArray = Ensure-ArrayOrFail -Label "Pending username change requests" -Value $pendingUsernameRequestsJson
+        $pendingUsernameRequest = $pendingUsernameRequestsArray | Where-Object { $_.id -eq $usernameChangeRequestJson.id } | Select-Object -First 1
+        if ($null -eq $pendingUsernameRequest) {
+            Fail "Pending username change request not found in admin list."
+        }
+
+        Write-Step "ACCOUNT FLOW: superAdmin approves username change request"
+        $approveUsernameRequest = Invoke-CurlJson -Method "POST" -Url "$base/api/admin/username-change-requests/$($usernameChangeRequestJson.id)/approve" -CookieIn $cookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Approve username change request" -Actual $approveUsernameRequest.Status -Expected 200 -Body $approveUsernameRequest.Body
+        $approveUsernameRequestJson = Parse-JsonOrFail -Label "Approve username change request" -Body $approveUsernameRequest.Body
+        if ($approveUsernameRequestJson.status -ne "APPROVED" -or $approveUsernameRequestJson.desiredUsername -ne $renamedInviteUserName) {
+            Fail "Approve username change response mismatch. Body: $($approveUsernameRequest.Body)"
+        }
+        Write-Pass "Username change approval OK"
+
+        Write-Step "ACCOUNT FLOW: old invite username can no longer log in"
+        $oldInviteLogin = Invoke-CurlJson -Method "POST" -Url "$base/api/login" -Body $inviteLoginBody -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Old invite username login after rename" -Actual $oldInviteLogin.Status -Expected 401 -Body $oldInviteLogin.Body
+        Write-Pass "Old invite username rejected after rename"
+
+        Write-Step "ACCOUNT FLOW: existing invited user session now shows renamed username"
+        $renamedAccount = Invoke-CurlJson -Method "GET" -Url "$base/api/account" -CookieIn $inviteCookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Renamed invited user account" -Actual $renamedAccount.Status -Expected 200 -Body $renamedAccount.Body
+        $renamedAccountJson = Parse-JsonOrFail -Label "Renamed invited user account" -Body $renamedAccount.Body
+        if ($renamedAccountJson.username -ne $renamedInviteUserName) {
+            Fail "Renamed invited user account did not return new username. Body: $($renamedAccount.Body)"
+        }
+        Write-Pass "Renamed invited user account OK"
+    } else {
+        Write-Step "ACCOUNT FLOW: username change approval skipped (requires superAdmin)"
+        $renamedInviteUserName = $inviteUserName
+    }
+
+    $newInviteUserPassword = "InviteUser!456"
+    Write-Step "ACCOUNT FLOW: invited user changes own password"
+    $changeOwnPasswordBody = @{
+        currentPassword = $inviteUserPassword
+        newPassword = $newInviteUserPassword
+    } | ConvertTo-Json -Compress
+    $changeOwnPassword = Invoke-CurlJson -Method "POST" -Url "$base/api/account/password" -Body $changeOwnPasswordBody -CookieIn $inviteCookieFile -CookieOut $inviteCookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Invited user change own password" -Actual $changeOwnPassword.Status -Expected 200 -Body $changeOwnPassword.Body
+    Write-Pass "Invited user change own password OK"
+
+    Write-Step "ACCOUNT FLOW: old invited user session is invalid after password change"
+    $inviteAccountAfterPasswordChange = Invoke-CurlJson -Method "GET" -Url "$base/api/account" -CookieIn $inviteCookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Invited user account after password change" -Actual $inviteAccountAfterPasswordChange.Status -Expected 401 -Body $inviteAccountAfterPasswordChange.Body
+    Write-Pass "Invited user session invalidated after password change"
+
+    Write-Step "ACCOUNT FLOW: invited user logs in with new password"
+    $inviteLoginWithNewPasswordBody = @{ username = $renamedInviteUserName; password = $newInviteUserPassword } | ConvertTo-Json -Compress
+    $inviteLoginWithNewPassword = Invoke-CurlJson -Method "POST" -Url "$base/api/login" -Body $inviteLoginWithNewPasswordBody -CookieOut $inviteCookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Invited user login with new password" -Actual $inviteLoginWithNewPassword.Status -Expected 200 -Body $inviteLoginWithNewPassword.Body
+    Write-Pass "Invited user login with new password OK"
 
     Write-Step "USER ROLE FLOW: list admin users"
     $adminUsers = Invoke-CurlJson -Method "GET" -Url "$base/api/admin/users" -CookieIn $cookieFile -TmpDir $tmpDir
     Assert-HttpStatus -Label "Admin users list" -Actual $adminUsers.Status -Expected 200 -Body $adminUsers.Body
     $adminUsersJson = Parse-JsonOrFail -Label "Admin users list" -Body $adminUsers.Body
     $adminUsersArray = Ensure-ArrayOrFail -Label "Admin users list" -Value $adminUsersJson
-    $invitedUserFromList = $adminUsersArray | Where-Object { $_.username -eq $inviteUserName } | Select-Object -First 1
+    $invitedUserFromList = $adminUsersArray | Where-Object { $_.username -eq $renamedInviteUserName } | Select-Object -First 1
     if ($null -eq $invitedUserFromList) {
         Fail "Invited user not found in admin users list."
     }
@@ -804,6 +885,33 @@ try {
         Fail "Retention cleanup execute deletedCount exceeds candidateCount. Body: $($cleanupExec.Body)"
     }
     Write-Pass "Retention cleanup execute OK"
+
+    if ($meJson.role -eq "superAdmin") {
+        Write-Step "AUDIT FLOW: list audit events before clear"
+        $auditBeforeClear = Invoke-CurlJson -Method "GET" -Url "$base/api/admin/audit/events?limit=20" -CookieIn $cookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Audit list before clear" -Actual $auditBeforeClear.Status -Expected 200 -Body $auditBeforeClear.Body
+        $auditBeforeClearJson = Parse-JsonOrFail -Label "Audit list before clear" -Body $auditBeforeClear.Body
+        $auditBeforeClearArray = Ensure-ArrayOrFail -Label "Audit list before clear" -Value $auditBeforeClearJson
+        if (@($auditBeforeClearArray).Count -lt 1) {
+            Fail "Audit list before clear expected at least one entry."
+        }
+
+        Write-Step "AUDIT FLOW: clear audit log"
+        $auditClear = Invoke-CurlJson -Method "DELETE" -Url "$base/api/admin/audit/events" -CookieIn $cookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Clear audit log" -Actual $auditClear.Status -Expected 204 -Body $auditClear.Body
+
+        Write-Step "AUDIT FLOW: verify audit log is empty"
+        $auditAfterClear = Invoke-CurlJson -Method "GET" -Url "$base/api/admin/audit/events?limit=20" -CookieIn $cookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Audit list after clear" -Actual $auditAfterClear.Status -Expected 200 -Body $auditAfterClear.Body
+        $auditAfterClearJson = Parse-JsonOrFail -Label "Audit list after clear" -Body $auditAfterClear.Body
+        $auditAfterClearArray = Ensure-ArrayOrFail -Label "Audit list after clear" -Value $auditAfterClearJson
+        if (@($auditAfterClearArray).Count -ne 0) {
+            Fail "Audit list expected empty after clear. Body: $($auditAfterClear.Body)"
+        }
+        Write-Pass "Audit log clear OK"
+    } else {
+        Write-Step "AUDIT FLOW skipped (requires superAdmin)"
+    }
 
     Write-Step "POST $base/api/logout"
     $logout = Invoke-CurlJson -Method "POST" -Url "$base/api/logout" -CookieIn $cookieFile -CookieOut $cookieFile -TmpDir $tmpDir

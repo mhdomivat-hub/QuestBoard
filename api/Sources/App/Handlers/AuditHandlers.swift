@@ -28,3 +28,12 @@ func listAuditEvents(_ req: Request) async throws -> [AuditEventResponseDTO] {
         )
     }
 }
+
+func clearAuditEvents(_ req: Request) async throws -> HTTPStatus {
+    let actor = try requireSuperAdmin(req)
+
+    try await AuditEvent.query(on: req.db).delete()
+
+    req.logger.notice("Audit log cleared by \(actor.username)")
+    return .noContent
+}
