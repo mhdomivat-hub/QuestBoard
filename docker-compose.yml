@@ -82,6 +82,23 @@ services:
     networks:
       - questboard
 
+  discord-bot:
+    build:
+      context: ./discord-bot
+    restart: unless-stopped
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      DISCORD_APP_ID: ${DISCORD_APP_ID}
+      DISCORD_PUBLIC_GUILD_ID: ${DISCORD_PUBLIC_GUILD_ID}
+      DISCORD_INTERNAL_GUILD_ID: ${DISCORD_INTERNAL_GUILD_ID}
+      DISCORD_ACTIVITY_ROLE_ID: ${DISCORD_ACTIVITY_ROLE_ID}
+      DISCORD_REPORT_CHANNEL_ID: ${DISCORD_REPORT_CHANNEL_ID}
+      DISCORD_COMMAND_ROLE_ID: ${DISCORD_COMMAND_ROLE_ID}
+      DISCORD_CHECK_COMMAND_NAME: ${DISCORD_CHECK_COMMAND_NAME}
+      DISCORD_CACHE_TTL_MS: ${DISCORD_CACHE_TTL_MS}
+    networks:
+      - questboard
+
 volumes:
   caddy_data:
   caddy_config:

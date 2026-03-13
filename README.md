@@ -5,6 +5,7 @@ QuestBoard besteht aus:
 - Vapor API (Swift)
 - Next.js Web-Frontend
 - PostgreSQL
+- optionalem Discord-Bot fuer Rollensync und Aktivitaets-Tracking
 
 ## Projektstruktur
 
@@ -12,6 +13,7 @@ QuestBoard besteht aus:
 - Caddyfile / Caddyfile.example
 - api/ (Vapor)
 - web/ (Next.js)
+- discord-bot/ (Discord.js Bot)
 - scripts/install-server.sh (Linux/Hetzner Bootstrap)
 - scripts/smoke-test.ps1 (E2E Smoke-Test)
 
@@ -30,6 +32,46 @@ docker compose up -d --build
 docker compose ps
 docker compose logs -f --tail=200
 ~~~
+
+## Discord-Bot
+
+Der Bot ist ein eigener Compose-Service und speichert keine Nutzerdaten dauerhaft.
+Er nutzt nur fluechtigen In-Memory-Cache, um doppelte Role-Removals bei schnellen
+Events zu vermeiden.
+
+### Funktion
+
+- Slash-Command `/checkactivity` nur im internen Server
+- listet zuerst alle aktuellen Mitglieder mit der konfigurierten Rolle in den Report-Channel
+- weist danach die Rolle allen nicht-Bot-Mitgliedern zu, die gleichzeitig im Public- und im internen Server sind
+- entfernt die Rolle wieder, sobald ein betroffenes Mitglied auf einem der beiden Server aktiv wird:
+  - Nachricht schreiben
+  - Reaktion hinzufuegen
+  - Voice- oder Stage-Channel beitreten
+
+### Noetige .env-Werte
+
+~~~env
+DISCORD_TOKEN=
+DISCORD_APP_ID=
+DISCORD_PUBLIC_GUILD_ID=
+DISCORD_INTERNAL_GUILD_ID=
+DISCORD_ACTIVITY_ROLE_ID=
+DISCORD_REPORT_CHANNEL_ID=
+DISCORD_COMMAND_ROLE_ID=
+DISCORD_CHECK_COMMAND_NAME=checkactivity
+DISCORD_DIAGNOSE_COMMAND_NAME=activitystatus
+DISCORD_CACHE_TTL_MS=60000
+DISCORD_AUTO_REGISTER_COMMANDS=true
+~~~
+
+Hinweise:
+- Slash-Command-Namen muessen bei Discord kleingeschrieben sein, daher standardmaessig `checkactivity`
+- zusaetzlich gibt es standardmaessig `/activitystatus` fuer einen schnellen Diagnose-Check von Serverzugriff, Zielrolle, Report-Channel und Rollenhierarchie
+- wenn `DISCORD_COMMAND_ROLE_ID` leer bleibt, duerfen standardmaessig Mitglieder mit `Manage Roles` den Command ausfuehren
+- wenn `DISCORD_AUTO_REGISTER_COMMANDS=false` gesetzt ist, versucht der Bot beim Start nicht jedes Mal den Slash-Command mit Discord abzugleichen
+- der Bot braucht in Discord mindestens die Berechtigungen fuer `Manage Roles`, `View Channels`, `Send Messages`, `Read Message History` und die passenden Gateway Intents fuer Members, Messages, Reactions und Voice States
+- der Bot nutzt stark begrenzte Discord.js-Caches und nur einen kurzen In-Memory-Cache fuer doppelte Role-Removals
 
 ## Server-Installation (frischer Hetzner Linux Host)
 
