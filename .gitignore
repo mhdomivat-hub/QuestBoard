@@ -3,6 +3,7 @@
 # Node
 web/node_modules
 web/.next
+discord-bot/node_modules
 
 # Swift
 api/.build
