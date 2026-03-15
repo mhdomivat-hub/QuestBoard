@@ -21,6 +21,12 @@ private func requireBlueprintBadgeAdmin(_ user: User) throws {
     }
 }
 
+private func requireBlueprintAdmin(_ user: User) throws {
+    guard user.role == .admin || user.role == .superAdmin else {
+        throw Abort(.forbidden, reason: "Only admins may manage top-level blueprints")
+    }
+}
+
 private func sanitizeBlueprintName(_ value: String) throws -> String {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
@@ -35,6 +41,12 @@ private func sanitizeBlueprintName(_ value: String) throws -> String {
 private func sanitizeBlueprintDescription(_ value: String?) -> String? {
     let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return trimmed.isEmpty ? nil : trimmed
+}
+
+private func sanitizeBlueprintItemCode(_ value: String?) -> String? {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !trimmed.isEmpty else { return nil }
+    return String(trimmed.prefix(160))
 }
 
 private func sanitizeBlueprintBadges(_ values: [String]?) -> [String] {
@@ -183,6 +195,7 @@ private func buildBlueprintTree(
             parentId: node.$parent.id,
             name: node.name,
             description: node.description,
+            itemCode: node.itemCode,
             badges: decodeBlueprintBadges(node.badgesCSV),
             category: node.category,
             isCraftable: node.isCraftable,
@@ -221,6 +234,7 @@ private func blueprintDetailDTO(
             return BlueprintChildSummaryDTO(
                 id: childID,
                 name: child.name,
+                itemCode: child.itemCode,
                 badges: decodeBlueprintBadges(child.badgesCSV),
                 category: child.category,
                 isCraftable: child.isCraftable,
@@ -234,6 +248,7 @@ private func blueprintDetailDTO(
         parentId: blueprint.$parent.id,
         name: blueprint.name,
         description: blueprint.description,
+        itemCode: blueprint.itemCode,
         badges: decodeBlueprintBadges(blueprint.badgesCSV),
         availableBadges: availableBadges,
         category: blueprint.category,
@@ -261,6 +276,7 @@ func listBlueprints(_ req: Request) async throws -> BlueprintListResponseDTO {
                 parentId: nil,
                 name: root.name,
                 description: root.description,
+                itemCode: root.itemCode,
                 badges: decodeBlueprintBadges(root.badgesCSV),
                 category: root.category,
                 isCraftable: root.isCraftable,
@@ -299,6 +315,7 @@ func createBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO 
         }
         resolvedCategory = parent.category
     } else {
+        try requireBlueprintAdmin(actor)
         resolvedCategory = .blueprints
     }
 
@@ -306,6 +323,7 @@ func createBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO 
         parentID: body.parentId,
         name: try sanitizeBlueprintName(body.name),
         description: sanitizeBlueprintDescription(body.description),
+        itemCode: sanitizeBlueprintItemCode(body.itemCode),
         badgesCSV: encodeBlueprintBadges(badges),
         category: resolvedCategory,
         isCraftable: false
@@ -362,6 +380,7 @@ func updateBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO 
 
     blueprint.name = try sanitizeBlueprintName(body.name)
     blueprint.description = sanitizeBlueprintDescription(body.description)
+    blueprint.itemCode = sanitizeBlueprintItemCode(body.itemCode)
     blueprint.badgesCSV = encodeBlueprintBadges(badges)
     blueprint.category = resolvedCategory
     try await blueprint.save(on: req.db)
@@ -548,6 +567,112 @@ func deleteBlueprintBadge(_ req: Request) async throws -> BlueprintListResponseD
     )
 
     return try await listBlueprints(req)
+}
+
+func mergeBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO {
+    let actor = try requireBlueprintEditor(req)
+    try requireBlueprintAdmin(actor)
+
+    guard let currentBlueprint = try await Blueprint.find(req.parameters.get("blueprintID"), on: req.db) else {
+        throw Abort(.notFound)
+    }
+    let currentId = try currentBlueprint.requireID()
+    let body = try req.content.decode(BlueprintMergeDTO.self)
+
+    guard body.otherBlueprintId != currentId else {
+        throw Abort(.badRequest, reason: "Cannot merge a blueprint with itself")
+    }
+    guard let otherBlueprint = try await Blueprint.find(body.otherBlueprintId, on: req.db) else {
+        throw Abort(.badRequest, reason: "Other blueprint not found")
+    }
+
+    let keepCurrent = body.keepValuesFrom.uppercased() != "OTHER"
+    let primary = keepCurrent ? currentBlueprint : otherBlueprint
+    let secondary = keepCurrent ? otherBlueprint : currentBlueprint
+    let primaryId = try primary.requireID()
+    let secondaryId = try secondary.requireID()
+
+    let targetParentId: UUID?
+    switch body.parentChoice.uppercased() {
+    case "OTHER":
+        targetParentId = otherBlueprint.$parent.id
+    case "ROOT":
+        targetParentId = nil
+    default:
+        targetParentId = currentBlueprint.$parent.id
+    }
+
+    let allBlueprints = try await Blueprint.query(on: req.db).all()
+    let groupedByParent = Dictionary(grouping: allBlueprints, by: { $0.$parent.id })
+    let secondaryDescendantIds = collectDescendantIds(rootId: secondaryId, groupedByParent: groupedByParent)
+    if let targetParentId, (targetParentId == secondaryId || secondaryDescendantIds.contains(targetParentId)) {
+        throw Abort(.badRequest, reason: "Selected parent would create an invalid hierarchy")
+    }
+
+    primary.$parent.id = targetParentId
+    primary.badgesCSV = encodeBlueprintBadges(
+        sanitizeBlueprintBadges(decodeBlueprintBadges(primary.badgesCSV) + decodeBlueprintBadges(secondary.badgesCSV))
+    )
+    primary.isCraftable = primary.isCraftable || secondary.isCraftable
+    try await primary.save(on: req.db)
+
+    let secondaryChildren = try await Blueprint.query(on: req.db)
+        .filter(\.$parent.$id == secondaryId)
+        .all()
+    for child in secondaryChildren {
+        child.$parent.id = primaryId
+        try await child.save(on: req.db)
+    }
+
+    let existingPrimaryAssignments = try await BlueprintCrafter.query(on: req.db)
+        .filter(\.$blueprint.$id == primaryId)
+        .all()
+    let existingPrimaryUserIds = Set(existingPrimaryAssignments.map { $0.$user.id })
+    let secondaryAssignments = try await BlueprintCrafter.query(on: req.db)
+        .filter(\.$blueprint.$id == secondaryId)
+        .all()
+
+    for assignment in secondaryAssignments where !existingPrimaryUserIds.contains(assignment.$user.id) {
+        let mergedAssignment = BlueprintCrafter(blueprintID: primaryId, userID: assignment.$user.id)
+        try await mergedAssignment.save(on: req.db)
+    }
+
+    try await BlueprintCrafter.query(on: req.db)
+        .filter(\.$blueprint.$id == secondaryId)
+        .delete()
+    try await secondary.delete(on: req.db)
+
+    await recordAuditEvent(
+        on: req,
+        actor: actor,
+        action: "blueprint.merge",
+        entityType: "blueprint",
+        entityId: primaryId,
+        details: "merged=\(secondaryId.uuidString);keepValuesFrom=\(body.keepValuesFrom);parentChoice=\(body.parentChoice)"
+    )
+
+    return try await getBlueprintById(primaryId, on: req.db)
+}
+
+func deleteBlueprint(_ req: Request) async throws -> HTTPStatus {
+    let actor = try requireBlueprintEditor(req)
+    try requireBlueprintAdmin(actor)
+
+    guard let blueprint = try await Blueprint.find(req.parameters.get("blueprintID"), on: req.db) else {
+        throw Abort(.notFound)
+    }
+    let blueprintId = try blueprint.requireID()
+    try await blueprint.delete(on: req.db)
+
+    await recordAuditEvent(
+        on: req,
+        actor: actor,
+        action: "blueprint.delete",
+        entityType: "blueprint",
+        entityId: blueprintId
+    )
+
+    return .noContent
 }
 
 private func getBlueprintById(_ blueprintId: UUID?, on db: Database) async throws -> BlueprintDetailResponseDTO {

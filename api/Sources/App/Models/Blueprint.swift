@@ -27,6 +27,9 @@ final class Blueprint: Model, Content, @unchecked Sendable {
     @OptionalField(key: "description")
     var description: String?
 
+    @OptionalField(key: "item_code")
+    var itemCode: String?
+
     @OptionalField(key: "badges_csv")
     var badgesCSV: String?
 
@@ -49,6 +52,7 @@ final class Blueprint: Model, Content, @unchecked Sendable {
         parentID: UUID? = nil,
         name: String,
         description: String? = nil,
+        itemCode: String? = nil,
         badgesCSV: String? = nil,
         category: BlueprintCategory,
         isCraftable: Bool
@@ -57,6 +61,7 @@ final class Blueprint: Model, Content, @unchecked Sendable {
         self.$parent.id = parentID
         self.name = name
         self.description = description
+        self.itemCode = itemCode
         self.badgesCSV = badgesCSV
         self.category = category
         self.isCraftable = isCraftable
@@ -80,6 +85,7 @@ struct CreateBlueprint: AsyncMigration {
             .field("parent_id", .uuid, .references(Blueprint.schema, .id, onDelete: .cascade))
             .field("name", .string, .required)
             .field("description", .string)
+            .field("item_code", .string)
             .field("badges_csv", .string)
             .field("category", categoryEnum, .required)
             .field("is_craftable", .bool, .required, .sql(.default(false)))
@@ -158,5 +164,29 @@ struct AddBlueprintBadgesField: AsyncMigration {
         }
 
         try await sql.raw("ALTER TABLE \"\(unsafeRaw: Blueprint.schema)\" DROP COLUMN IF EXISTS \"badges_csv\"").run()
+    }
+}
+
+struct AddBlueprintItemCodeField: AsyncMigration {
+    func prepare(on database: Database) async throws {
+        guard let sql = database as? SQLDatabase else {
+            try await database.schema(Blueprint.schema)
+                .field("item_code", .string)
+                .update()
+            return
+        }
+
+        try await sql.raw("ALTER TABLE \"\(unsafeRaw: Blueprint.schema)\" ADD COLUMN IF NOT EXISTS \"item_code\" TEXT").run()
+    }
+
+    func revert(on database: Database) async throws {
+        guard let sql = database as? SQLDatabase else {
+            try await database.schema(Blueprint.schema)
+                .deleteField("item_code")
+                .update()
+            return
+        }
+
+        try await sql.raw("ALTER TABLE \"\(unsafeRaw: Blueprint.schema)\" DROP COLUMN IF EXISTS \"item_code\"").run()
     }
 }

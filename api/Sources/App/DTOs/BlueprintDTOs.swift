@@ -4,12 +4,14 @@ struct BlueprintCreateDTO: Content {
     let parentId: UUID?
     let name: String
     let description: String?
+    let itemCode: String?
     let badges: [String]?
 }
 
 struct BlueprintUpdateDTO: Content {
     let name: String
     let description: String?
+    let itemCode: String?
     let badges: [String]
     let parentId: UUID?
 }
@@ -27,6 +29,12 @@ struct BlueprintDeleteBadgeDTO: Content {
     let badge: String
 }
 
+struct BlueprintMergeDTO: Content {
+    let otherBlueprintId: UUID
+    let keepValuesFrom: String
+    let parentChoice: String
+}
+
 struct BlueprintCrafterResponseDTO: Content {
     let userId: UUID
     let username: String
@@ -37,6 +45,7 @@ struct BlueprintTreeNodeDTO: Content {
     let parentId: UUID?
     let name: String
     let description: String?
+    let itemCode: String?
     let badges: [String]
     let category: BlueprintCategory
     let isCraftable: Bool
@@ -54,6 +63,7 @@ struct BlueprintDetailResponseDTO: Content {
     let parentId: UUID?
     let name: String
     let description: String?
+    let itemCode: String?
     let badges: [String]
     let availableBadges: [String]
     let category: BlueprintCategory
@@ -71,6 +81,7 @@ struct BlueprintBreadcrumbItemDTO: Content {
 struct BlueprintChildSummaryDTO: Content {
     let id: UUID
     let name: String
+    let itemCode: String?
     let badges: [String]
     let category: BlueprintCategory
     let isCraftable: Bool

@@ -18,6 +18,7 @@ type BlueprintTreeNode = {
   parentId?: string | null;
   name: string;
   description?: string | null;
+  itemCode?: string | null;
   badges: string[];
   isCraftable: boolean;
   crafters: Crafter[];
@@ -145,6 +146,7 @@ export default function BlueprintsPage() {
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [itemCode, setItemCode] = useState("");
   const [selectedBadges, setSelectedBadges] = useState<string[]>([]);
   const [newBadgesInput, setNewBadgesInput] = useState("");
   const [renamingBadge, setRenamingBadge] = useState<string | null>(null);
@@ -154,6 +156,7 @@ export default function BlueprintsPage() {
   const canEdit = role !== null && role !== "guest";
   const canStructureEdit = role === "admin" || role === "superAdmin";
   const canCreateBadges = role === "admin" || role === "superAdmin";
+  const canCreateRoot = role === "admin" || role === "superAdmin";
 
   async function loadAll() {
     setError(null);
@@ -191,6 +194,7 @@ export default function BlueprintsPage() {
         body: JSON.stringify({
           name,
           description,
+          itemCode: itemCode || null,
           badges
         })
       });
@@ -204,6 +208,7 @@ export default function BlueprintsPage() {
       const created = await res.json();
       setName("");
       setDescription("");
+      setItemCode("");
       setSelectedBadges([]);
       setNewBadgesInput("");
       await loadAll();
@@ -295,6 +300,7 @@ export default function BlueprintsPage() {
         body: JSON.stringify({
           name: sourceNode.name,
           description: sourceNode.description ?? "",
+          itemCode: sourceNode.itemCode ?? null,
           badges: sourceNode.badges,
           parentId
         })
@@ -474,12 +480,13 @@ export default function BlueprintsPage() {
         </Card>
       ) : null}
 
-      {canEdit ? (
+      {canCreateRoot ? (
         <Card>
           <h2 className="qb-card-title">Neuen Oberpunkt anlegen</h2>
           <form className="qb-form" onSubmit={createRoot}>
             <TextInput placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
             <TextArea placeholder="Beschreibung" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+            <TextInput placeholder="Interner Item-Name fuer SCMDB (optional)" value={itemCode} onChange={(e) => setItemCode(e.target.value)} />
             <div className="qb-inline" style={{ flexWrap: "wrap" }}>
               {data?.availableBadges.map((badge) => (
                 <Button

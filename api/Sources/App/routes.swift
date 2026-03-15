@@ -19,6 +19,8 @@ public func routes(_ app: Application) throws {
     authed.post("blueprints", use: createBlueprint)
     authed.get("blueprints", ":blueprintID", use: getBlueprint)
     authed.patch("blueprints", ":blueprintID", use: updateBlueprint)
+    authed.post("blueprints", ":blueprintID", "merge", use: mergeBlueprint)
+    authed.delete("blueprints", ":blueprintID", use: deleteBlueprint)
     authed.post("blueprints", ":blueprintID", "crafters", use: addBlueprintCrafter)
     authed.delete("blueprints", ":blueprintID", "crafters", ":userID", use: removeBlueprintCrafter)
     authed.post("blueprints", "badges", "rename", use: renameBlueprintBadge)

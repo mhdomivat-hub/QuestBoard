@@ -34,6 +34,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddBlueprintTopLevelCategories())
     app.migrations.add(AddBlueprintUnifiedCategory())
     app.migrations.add(AddBlueprintBadgesField())
+    app.migrations.add(AddBlueprintItemCodeField())
     app.migrations.add(CreateBlueprintCrafter())
     app.migrations.add(CreateQuestTemplate())
     app.migrations.add(CreateQuestTemplateRequirement())
