@@ -55,6 +55,17 @@ function findLocationById(nodes: LocationNode[], id: string): LocationNode | nul
   return null;
 }
 
+function collectCollapsibleLocationIds(nodes: LocationNode[]): string[] {
+  return nodes.flatMap((node) => [
+    ...(node.children.length > 0 ? [node.id] : []),
+    ...collectCollapsibleLocationIds(node.children)
+  ]);
+}
+
+function collectLocationSubtreeIds(node: LocationNode): string[] {
+  return [node.id, ...node.children.flatMap((child) => collectLocationSubtreeIds(child))];
+}
+
 function filterTree(nodes: ItemNode[], search: string, activeBadges: string[], activeLocations: string[]): ItemNode[] {
   const needle = search.trim().toLowerCase();
   const badgeSet = new Set(activeBadges.map((item) => item.toLowerCase()));
@@ -191,7 +202,7 @@ function LocationBranch({
   collapsedIds: string[];
   activeLocations: string[];
   onToggleCollapse: (nodeId: string) => void;
-  onToggleFilter: (nodeId: string) => void;
+  onToggleFilter: (node: LocationNode) => void;
   onDragStart: (node: LocationNode) => void;
   onDragEnd: () => void;
   onDropOnNode: (node: LocationNode) => void;
@@ -199,6 +210,8 @@ function LocationBranch({
   const hasChildren = node.children.length > 0;
   const isCollapsed = collapsedIds.includes(node.id);
   const canDropHere = editMode && draggedId !== null && draggedId !== node.id && moveBusyId === null;
+  const subtreeIds = collectLocationSubtreeIds(node);
+  const isFilterActive = subtreeIds.every((id) => activeLocations.includes(id));
 
   return (
     <div style={{ marginLeft: depth * 18, marginTop: depth === 0 ? 0 : 10 }}>
@@ -236,8 +249,8 @@ function LocationBranch({
           ) : null}
           <Button
             type="button"
-            variant={activeLocations.includes(node.id) ? "primary" : "secondary"}
-            onClick={() => onToggleFilter(node.id)}
+            variant={isFilterActive ? "primary" : "secondary"}
+            onClick={() => onToggleFilter(node)}
           >
             {node.name}
           </Button>
@@ -281,6 +294,7 @@ export default function StoragePage() {
   const [draggedLocation, setDraggedLocation] = useState<LocationNode | null>(null);
   const [locationMoveBusyId, setLocationMoveBusyId] = useState<string | null>(null);
   const [collapsedLocationIds, setCollapsedLocationIds] = useState<string[]>([]);
+  const [defaultCollapsedLocationsApplied, setDefaultCollapsedLocationsApplied] = useState(false);
 
   const [search, setSearch] = useState("");
   const [activeBadges, setActiveBadges] = useState<string[]>([]);
@@ -322,6 +336,12 @@ export default function StoragePage() {
   useEffect(() => {
     void loadAll();
   }, []);
+
+  useEffect(() => {
+    if (!data || defaultCollapsedLocationsApplied) return;
+    setCollapsedLocationIds(collectCollapsibleLocationIds(data.locations));
+    setDefaultCollapsedLocationsApplied(true);
+  }, [data, defaultCollapsedLocationsApplied]);
 
   async function createRootItem(e: FormEvent) {
     e.preventDefault();
@@ -518,7 +538,16 @@ export default function StoragePage() {
                   collapsedIds={collapsedLocationIds}
                   activeLocations={activeLocations}
                   onToggleCollapse={(nodeId) => setCollapsedLocationIds((current) => toggleValue(current, nodeId))}
-                  onToggleFilter={(locationId) => setActiveLocations((current) => toggleValue(current, locationId))}
+                  onToggleFilter={(locationNode) =>
+                    setActiveLocations((current) => {
+                      const subtreeIds = collectLocationSubtreeIds(locationNode);
+                      const subtreeActive = subtreeIds.every((id) => current.includes(id));
+                      if (subtreeActive) {
+                        return current.filter((id) => !subtreeIds.includes(id));
+                      }
+                      return Array.from(new Set([...current, ...subtreeIds]));
+                    })
+                  }
                   onDragStart={setDraggedLocation}
                   onDragEnd={() => setDraggedLocation(null)}
                   onDropOnNode={(node) => {
