@@ -138,9 +138,213 @@ function Assert-HttpStatus {
     }
 }
 
+function Test-ValueMatchesAnyPattern {
+    param(
+        [string]$Value,
+        [string[]]$Patterns
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    foreach ($pattern in $Patterns) {
+        if ($Value -match $pattern) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Invoke-CurlJsonBestEffort {
+    param(
+        [Parameter(Mandatory = $true)][string]$Method,
+        [Parameter(Mandatory = $true)][string]$Url,
+        [string]$Body,
+        [string]$CookieIn,
+        [string]$CookieOut,
+        [Parameter(Mandatory = $true)][string]$TmpDir
+    )
+
+    try {
+        $responseFile = Join-Path $TmpDir (([guid]::NewGuid().ToString()) + ".cleanup-response")
+        $args = @("-sS", "-X", $Method, "-o", $responseFile, "-w", "%{http_code}")
+
+        if ($CookieOut) {
+            $args += @("-c", $CookieOut)
+        }
+        if ($CookieIn) {
+            $args += @("-b", $CookieIn)
+        }
+
+        if ($Body) {
+            $payloadFile = Join-Path $TmpDir (([guid]::NewGuid().ToString()) + ".cleanup.json")
+            $enc = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($payloadFile, $Body, $enc)
+            $args += @("-H", "Content-Type: application/json", "--data-binary", "@$payloadFile")
+        }
+
+        $args += $Url
+        $statusRaw = & curl.exe @args
+        $status = 0
+        [void][int]::TryParse(($statusRaw | Out-String).Trim(), [ref]$status)
+
+        $bodyText = ""
+        if (Test-Path $responseFile) {
+            $bodyText = Get-Content -Path $responseFile -Raw
+        }
+
+        return @{ Status = $status; Body = $bodyText }
+    }
+    catch {
+        return @{ Status = 0; Body = "" }
+    }
+}
+
+function Try-ParseJson {
+    param([AllowEmptyString()][string]$Body)
+
+    if ([string]::IsNullOrWhiteSpace($Body)) {
+        return $null
+    }
+
+    try {
+        return $Body | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Flatten-TreeNodesWithDepth {
+    param(
+        [Parameter(Mandatory = $true)]$Nodes,
+        [int]$Depth = 0
+    )
+
+    $result = @()
+    foreach ($node in @($Nodes)) {
+        $result += [pscustomobject]@{
+            Id = $node.id
+            Name = $node.name
+            Depth = $Depth
+            Node = $node
+        }
+
+        if ($null -ne $node.children) {
+            $result += Flatten-TreeNodesWithDepth -Nodes $node.children -Depth ($Depth + 1)
+        }
+    }
+
+    return $result
+}
+
+function Cleanup-SmokeArtifacts {
+    param(
+        [Parameter(Mandatory = $true)][string]$Base,
+        [Parameter(Mandatory = $true)][string]$TmpDir,
+        [Parameter(Mandatory = $true)][string]$AdminUsername,
+        [Parameter(Mandatory = $true)][string]$AdminPassword,
+        [string]$PreserveMemberUsername
+    )
+
+    $questPatterns = @("^Smoke Quest ", "^Member Smoke Quest ", "^Import Smoke Quest ", "^Split Import Quest ", "^Smoke Template Quest ")
+    $templatePatterns = @("^Smoke Template ")
+    $blueprintPatterns = @("^Smoke ")
+    $locationPatterns = @("^Smoke ")
+    $userPatterns = @("^InviteUser", "^SmokeUser")
+    $cleanupCookie = Join-Path $TmpDir "cleanup-cookies.txt"
+
+    Write-Step "CLEANUP: login as admin"
+    $loginBody = @{ username = $AdminUsername; password = $AdminPassword } | ConvertTo-Json -Compress
+    $cleanupLogin = Invoke-CurlJsonBestEffort -Method "POST" -Url "$Base/api/login" -Body $loginBody -CookieOut $cleanupCookie -TmpDir $TmpDir
+    if ($cleanupLogin.Status -ne 200) {
+        Write-Host "[WARN] Cleanup login failed, skipping artifact cleanup." -ForegroundColor Yellow
+        return
+    }
+
+    $cleanupMe = Invoke-CurlJsonBestEffort -Method "GET" -Url "$Base/api/me" -CookieIn $cleanupCookie -TmpDir $TmpDir
+    $cleanupMeJson = Try-ParseJson -Body $cleanupMe.Body
+    $isSuperAdmin = $cleanupMeJson -and $cleanupMeJson.role -eq "superAdmin"
+
+    Write-Step "CLEANUP: delete smoke quest templates"
+    $templateList = Invoke-CurlJsonBestEffort -Method "GET" -Url "$Base/api/admin/quest-templates" -CookieIn $cleanupCookie -TmpDir $TmpDir
+    $templateListJson = Try-ParseJson -Body $templateList.Body
+    foreach ($template in @($templateListJson)) {
+        if (Test-ValueMatchesAnyPattern -Value $template.title -Patterns $templatePatterns) {
+            [void](Invoke-CurlJsonBestEffort -Method "DELETE" -Url "$Base/api/admin/quest-templates/$($template.id)" -CookieIn $cleanupCookie -TmpDir $TmpDir)
+        }
+    }
+
+    Write-Step "CLEANUP: delete smoke quests"
+    $questList = Invoke-CurlJsonBestEffort -Method "GET" -Url "$Base/api/quests?limit=500" -CookieIn $cleanupCookie -TmpDir $TmpDir
+    $questListJson = Try-ParseJson -Body $questList.Body
+    foreach ($quest in @($questListJson)) {
+        if (-not (Test-ValueMatchesAnyPattern -Value $quest.title -Patterns $questPatterns)) {
+            continue
+        }
+
+        if ($quest.status -ne "ARCHIVED") {
+            $archiveBody = @{ status = "ARCHIVED" } | ConvertTo-Json -Compress
+            [void](Invoke-CurlJsonBestEffort -Method "PATCH" -Url "$Base/api/quests/$($quest.id)/status" -Body $archiveBody -CookieIn $cleanupCookie -TmpDir $TmpDir)
+        }
+
+        [void](Invoke-CurlJsonBestEffort -Method "PATCH" -Url "$Base/api/quests/$($quest.id)/delete" -CookieIn $cleanupCookie -TmpDir $TmpDir)
+    }
+
+    Write-Step "CLEANUP: delete smoke blueprint/storage items"
+    $blueprintList = Invoke-CurlJsonBestEffort -Method "GET" -Url "$Base/api/blueprints" -CookieIn $cleanupCookie -TmpDir $TmpDir
+    $blueprintListJson = Try-ParseJson -Body $blueprintList.Body
+    $flattenedBlueprints = @()
+    if ($blueprintListJson -and $blueprintListJson.blueprints) {
+        $flattenedBlueprints = Flatten-TreeNodesWithDepth -Nodes $blueprintListJson.blueprints | Sort-Object Depth -Descending
+    }
+    foreach ($entry in $flattenedBlueprints) {
+        if (Test-ValueMatchesAnyPattern -Value $entry.Name -Patterns $blueprintPatterns) {
+            [void](Invoke-CurlJsonBestEffort -Method "DELETE" -Url "$Base/api/blueprints/$($entry.Id)" -CookieIn $cleanupCookie -TmpDir $TmpDir)
+        }
+    }
+
+    Write-Step "CLEANUP: delete smoke storage locations"
+    $locationList = Invoke-CurlJsonBestEffort -Method "GET" -Url "$Base/api/storage/locations" -CookieIn $cleanupCookie -TmpDir $TmpDir
+    $locationListJson = Try-ParseJson -Body $locationList.Body
+    $flattenedLocations = @()
+    if ($locationListJson) {
+        $flattenedLocations = Flatten-TreeNodesWithDepth -Nodes $locationListJson | Sort-Object Depth -Descending
+    }
+    foreach ($entry in $flattenedLocations) {
+        if (Test-ValueMatchesAnyPattern -Value $entry.Name -Patterns $locationPatterns) {
+            [void](Invoke-CurlJsonBestEffort -Method "DELETE" -Url "$Base/api/storage/locations/$($entry.Id)" -CookieIn $cleanupCookie -TmpDir $TmpDir)
+        }
+    }
+
+    if ($isSuperAdmin) {
+        Write-Step "CLEANUP: delete smoke users"
+        $adminUsers = Invoke-CurlJsonBestEffort -Method "GET" -Url "$Base/api/admin/users" -CookieIn $cleanupCookie -TmpDir $TmpDir
+        $adminUsersJson = Try-ParseJson -Body $adminUsers.Body
+        foreach ($user in @($adminUsersJson)) {
+            if ($user.username -eq $AdminUsername) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($PreserveMemberUsername) -and $user.username -eq $PreserveMemberUsername) { continue }
+            if (-not (Test-ValueMatchesAnyPattern -Value $user.username -Patterns $userPatterns)) { continue }
+            [void](Invoke-CurlJsonBestEffort -Method "DELETE" -Url "$Base/api/admin/users/$($user.id)" -CookieIn $cleanupCookie -TmpDir $TmpDir)
+        }
+    }
+
+    $isLocalBase = $Base -match '^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$'
+    if ($isLocalBase) {
+        Write-Step "CLEANUP: local-only cleanup for legacy invite/reset/request artifacts"
+        $targets = @("INVITES", "PASSWORD_RESETS", "USERNAME_CHANGE_REQUESTS")
+        $cleanupBody = @{ dryRun = $false; targets = $targets } | ConvertTo-Json -Compress
+        [void](Invoke-CurlJsonBestEffort -Method "POST" -Url "$Base/api/admin/retention/selected-cleanup" -Body $cleanupBody -CookieIn $cleanupCookie -TmpDir $TmpDir)
+    }
+}
+
 $base = $BaseUrl.TrimEnd("/")
 $tmpDir = Join-Path $env:TEMP ("questboard-smoke-" + [guid]::NewGuid().ToString())
 $cookieFile = Join-Path $tmpDir "cookies.txt"
+$memberCookieFile = $null
+$memberMeJson = $null
 $envPath = $EnvFile
 if ([string]::IsNullOrWhiteSpace($envPath)) {
     $envPath = Join-Path (Split-Path -Path $PSScriptRoot -Parent) ".env"
@@ -521,6 +725,315 @@ try {
         Write-Step "MEMBER FLOW skipped (SMOKE_MEMBER_USERNAME/SMOKE_MEMBER_PASSWORD not set)"
     }
 
+    Write-Step "BLUEPRINT FLOW: create blueprint items for merge, badge and storage coverage"
+    $smokeSuffix = Get-Date -Format "yyyyMMdd-HHmmss"
+    $blueprintAName = "Smoke Blueprint Merge A $smokeSuffix"
+    $blueprintBName = "Smoke Blueprint Merge B $smokeSuffix"
+    $badgeItemName = "Smoke Blueprint Badge $smokeSuffix"
+    $storageMergeAName = "Smoke Storage Merge A $smokeSuffix"
+    $storageMergeBName = "Smoke Storage Merge B $smokeSuffix"
+    $sharedBadge = "SmokeShared$smokeSuffix"
+    $renameBadgeFrom = "SmokeBadgeFrom$smokeSuffix"
+    $renameBadgeTo = "SmokeBadgeTo$smokeSuffix"
+
+    $blueprintABody = @{
+        name = $blueprintAName
+        description = "smoke blueprint primary"
+        itemCode = "SMOKE_BP_A_$smokeSuffix"
+        badges = @($sharedBadge)
+    } | ConvertTo-Json -Compress
+    $blueprintACreate = Invoke-CurlJson -Method "POST" -Url "$base/api/blueprints" -Body $blueprintABody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Blueprint create A" -Actual $blueprintACreate.Status -Expected 200 -Body $blueprintACreate.Body
+    $blueprintACreateJson = Parse-JsonOrFail -Label "Blueprint create A" -Body $blueprintACreate.Body
+
+    $blueprintBBody = @{
+        name = $blueprintBName
+        description = "smoke blueprint secondary"
+        itemCode = "SMOKE_BP_B_$smokeSuffix"
+        badges = @($sharedBadge)
+    } | ConvertTo-Json -Compress
+    $blueprintBCreate = Invoke-CurlJson -Method "POST" -Url "$base/api/blueprints" -Body $blueprintBBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Blueprint create B" -Actual $blueprintBCreate.Status -Expected 200 -Body $blueprintBCreate.Body
+    $blueprintBCreateJson = Parse-JsonOrFail -Label "Blueprint create B" -Body $blueprintBCreate.Body
+
+    $badgeBlueprintBody = @{
+        name = $badgeItemName
+        description = "smoke badge item"
+        itemCode = "SMOKE_BP_BADGE_$smokeSuffix"
+        badges = @($renameBadgeFrom, $sharedBadge)
+    } | ConvertTo-Json -Compress
+    $badgeBlueprintCreate = Invoke-CurlJson -Method "POST" -Url "$base/api/blueprints" -Body $badgeBlueprintBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Blueprint create badge item" -Actual $badgeBlueprintCreate.Status -Expected 200 -Body $badgeBlueprintCreate.Body
+    $badgeBlueprintCreateJson = Parse-JsonOrFail -Label "Blueprint create badge item" -Body $badgeBlueprintCreate.Body
+
+    $crafterUserId = if ($memberMeJson -and $memberMeJson.userId) { $memberMeJson.userId } else { $meJson.userId }
+    $addCrafterBody = @{ userId = $crafterUserId } | ConvertTo-Json -Compress
+    $addCrafterToBlueprintB = Invoke-CurlJson -Method "POST" -Url "$base/api/blueprints/$($blueprintBCreateJson.id)/crafters" -Body $addCrafterBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Blueprint add crafter" -Actual $addCrafterToBlueprintB.Status -Expected 200 -Body $addCrafterToBlueprintB.Body
+
+    Write-Step "STORAGE FLOW: create locations and entries"
+    $locationRootName = "Smoke Location Root $smokeSuffix"
+    $locationChildName = "Smoke Location Child $smokeSuffix"
+    if ($memberCookieFile) {
+        $createRootLocationBody = @{ name = $locationRootName; description = "member-created storage root" } | ConvertTo-Json -Compress
+        $createRootLocation = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/locations" -Body $createRootLocationBody -CookieIn $memberCookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Member create storage location" -Actual $createRootLocation.Status -Expected 200 -Body $createRootLocation.Body
+        $rootLocationList = Parse-JsonOrFail -Label "Member create storage location" -Body $createRootLocation.Body
+        $rootLocationNode = (Ensure-ArrayOrFail -Label "Storage locations after member create" -Value $rootLocationList) | Where-Object { $_.name -eq $locationRootName } | Select-Object -First 1
+    } else {
+        $createRootLocationBody = @{ name = $locationRootName; description = "admin-created storage root" } | ConvertTo-Json -Compress
+        $createRootLocation = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/locations" -Body $createRootLocationBody -CookieIn $cookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Admin create storage location" -Actual $createRootLocation.Status -Expected 200 -Body $createRootLocation.Body
+        $rootLocationList = Parse-JsonOrFail -Label "Admin create storage location" -Body $createRootLocation.Body
+        $rootLocationNode = (Ensure-ArrayOrFail -Label "Storage locations after admin create" -Value $rootLocationList) | Where-Object { $_.name -eq $locationRootName } | Select-Object -First 1
+    }
+    if ($null -eq $rootLocationNode) {
+        Fail "Storage root location not found after create."
+    }
+
+    $createChildLocationBody = @{ name = $locationChildName; description = "child location" } | ConvertTo-Json -Compress
+    $createChildLocation = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/locations" -Body $createChildLocationBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Create child storage location" -Actual $createChildLocation.Status -Expected 200 -Body $createChildLocation.Body
+    $childLocationList = Parse-JsonOrFail -Label "Create child storage location" -Body $createChildLocation.Body
+    $childLocationNode = (Ensure-ArrayOrFail -Label "Storage locations after child create" -Value $childLocationList) | Where-Object { $_.name -eq $locationChildName } | Select-Object -First 1
+    if ($null -eq $childLocationNode) {
+        Fail "Storage child location not found after create."
+    }
+
+    $moveChildLocationBody = @{
+        parentId = $rootLocationNode.id
+        name = $locationChildName
+        description = "child location moved under root"
+    } | ConvertTo-Json -Compress
+    $moveChildLocation = Invoke-CurlJson -Method "PATCH" -Url "$base/api/storage/locations/$($childLocationNode.id)" -Body $moveChildLocationBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Move child storage location under root" -Actual $moveChildLocation.Status -Expected 200 -Body $moveChildLocation.Body
+
+    $blueprintStorageEntryBody = @{
+        locationId = $childLocationNode.id
+        qty = 4
+        note = "smoke blueprint storage entry"
+    } | ConvertTo-Json -Compress
+    $blueprintStorageEntry = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/items/$($blueprintBCreateJson.id)/entries" -Body $blueprintStorageEntryBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Create storage entry on blueprint item" -Actual $blueprintStorageEntry.Status -Expected 200 -Body $blueprintStorageEntry.Body
+
+    if ($memberCookieFile) {
+        $memberStorageItemBody = @{
+            name = $storageMergeBName
+            description = "member storage entry target"
+            itemCode = "SMOKE_STORAGE_MEMBER_$smokeSuffix"
+            badges = @($sharedBadge)
+        } | ConvertTo-Json -Compress
+        $memberStorageItemCreate = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/items" -Body $memberStorageItemBody -CookieIn $cookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Create storage item for member entry" -Actual $memberStorageItemCreate.Status -Expected 200 -Body $memberStorageItemCreate.Body
+        $memberStorageItemCreateJson = Parse-JsonOrFail -Label "Create storage item for member entry" -Body $memberStorageItemCreate.Body
+
+        $memberEntryBody = @{
+            locationId = $rootLocationNode.id
+            qty = 2
+            note = "member-owned storage entry"
+        } | ConvertTo-Json -Compress
+        $memberEntryCreate = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/items/$($memberStorageItemCreateJson.id)/entries" -Body $memberEntryBody -CookieIn $memberCookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Member create storage entry" -Actual $memberEntryCreate.Status -Expected 200 -Body $memberEntryCreate.Body
+        $memberEntryCreateJson = Parse-JsonOrFail -Label "Member create storage entry" -Body $memberEntryCreate.Body
+        $memberEntry = @($memberEntryCreateJson.entries) | Where-Object { $_.username -eq $MemberUsername } | Select-Object -First 1
+        if ($null -eq $memberEntry) {
+            Fail "Member storage entry not found after create."
+        }
+
+        $memberEntryUpdateBody = @{ qty = 5; note = "member-updated-storage-entry" } | ConvertTo-Json -Compress
+        $memberEntryUpdate = Invoke-CurlJson -Method "PATCH" -Url "$base/api/storage/entries/$($memberEntry.id)" -Body $memberEntryUpdateBody -CookieIn $memberCookieFile -TmpDir $tmpDir
+        Assert-HttpStatus -Label "Member updates own storage entry qty" -Actual $memberEntryUpdate.Status -Expected 200 -Body $memberEntryUpdate.Body
+        $memberEntryUpdateJson = Parse-JsonOrFail -Label "Member updates own storage entry qty" -Body $memberEntryUpdate.Body
+        $updatedMemberEntry = @($memberEntryUpdateJson.entries) | Where-Object { $_.id -eq $memberEntry.id } | Select-Object -First 1
+        if ($null -eq $updatedMemberEntry -or $updatedMemberEntry.qty -ne 5) {
+            Fail "Member storage entry qty update did not persist. Body: $($memberEntryUpdate.Body)"
+        }
+        Write-Pass "Member storage location/create/update flow OK"
+    }
+
+    Write-Step "BLUEPRINT FLOW: merge blueprint items and verify crafter + storage entry carry over"
+    $mergeBlueprintBody = @{
+        otherBlueprintId = $blueprintBCreateJson.id
+        keepValuesFrom = "CURRENT"
+        parentChoice = "CURRENT"
+    } | ConvertTo-Json -Compress
+    $mergeBlueprint = Invoke-CurlJson -Method "POST" -Url "$base/api/blueprints/$($blueprintACreateJson.id)/merge" -Body $mergeBlueprintBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Blueprint merge" -Actual $mergeBlueprint.Status -Expected 200 -Body $mergeBlueprint.Body
+    $mergeBlueprintJson = Parse-JsonOrFail -Label "Blueprint merge" -Body $mergeBlueprint.Body
+    if (@($mergeBlueprintJson.crafters).Count -lt 1) {
+        Fail "Blueprint merge expected merged crafter assignment. Body: $($mergeBlueprint.Body)"
+    }
+    $mergedBlueprintStorage = Invoke-CurlJson -Method "GET" -Url "$base/api/storage/items/$($blueprintACreateJson.id)" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Merged blueprint storage detail" -Actual $mergedBlueprintStorage.Status -Expected 200 -Body $mergedBlueprintStorage.Body
+    $mergedBlueprintStorageJson = Parse-JsonOrFail -Label "Merged blueprint storage detail" -Body $mergedBlueprintStorage.Body
+    if (@($mergedBlueprintStorageJson.entries).Count -lt 1) {
+        Fail "Blueprint merge expected storage entries to move as well. Body: $($mergedBlueprintStorage.Body)"
+    }
+    Write-Pass "Blueprint merge carries crafter and storage data"
+
+    Write-Step "STORAGE FLOW: merge storage items and verify storage + crafter carry over"
+    $storageMergeABody = @{
+        name = $storageMergeAName
+        description = "storage merge primary"
+        itemCode = "SMOKE_STORAGE_A_$smokeSuffix"
+        badges = @($sharedBadge)
+    } | ConvertTo-Json -Compress
+    $storageMergeA = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/items" -Body $storageMergeABody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Create storage merge A item" -Actual $storageMergeA.Status -Expected 200 -Body $storageMergeA.Body
+    $storageMergeAJson = Parse-JsonOrFail -Label "Create storage merge A item" -Body $storageMergeA.Body
+
+    $storageMergeBBody = @{
+        name = $storageMergeBName
+        description = "storage merge secondary"
+        itemCode = "SMOKE_STORAGE_B_$smokeSuffix"
+        badges = @($sharedBadge)
+    } | ConvertTo-Json -Compress
+    $storageMergeB = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/items" -Body $storageMergeBBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Create storage merge B item" -Actual $storageMergeB.Status -Expected 200 -Body $storageMergeB.Body
+    $storageMergeBJson = Parse-JsonOrFail -Label "Create storage merge B item" -Body $storageMergeB.Body
+
+    $storageAddCrafter = Invoke-CurlJson -Method "POST" -Url "$base/api/blueprints/$($storageMergeBJson.id)/crafters" -Body $addCrafterBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Add crafter to storage merge B item" -Actual $storageAddCrafter.Status -Expected 200 -Body $storageAddCrafter.Body
+
+    $storageEntryBody = @{
+        locationId = $rootLocationNode.id
+        qty = 3
+        note = "storage merge entry"
+    } | ConvertTo-Json -Compress
+    $storageEntryCreate = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/items/$($storageMergeBJson.id)/entries" -Body $storageEntryBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Create storage entry for storage merge B" -Actual $storageEntryCreate.Status -Expected 200 -Body $storageEntryCreate.Body
+
+    $mergeStorageBody = @{
+        otherItemId = $storageMergeBJson.id
+        keepValuesFrom = "CURRENT"
+        parentChoice = "CURRENT"
+    } | ConvertTo-Json -Compress
+    $mergeStorage = Invoke-CurlJson -Method "POST" -Url "$base/api/storage/items/$($storageMergeAJson.id)/merge" -Body $mergeStorageBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Storage item merge" -Actual $mergeStorage.Status -Expected 200 -Body $mergeStorage.Body
+    $mergeStorageJson = Parse-JsonOrFail -Label "Storage item merge" -Body $mergeStorage.Body
+    if (@($mergeStorageJson.entries).Count -lt 1) {
+        Fail "Storage merge expected storage entry to move. Body: $($mergeStorage.Body)"
+    }
+    $mergedStorageBlueprint = Invoke-CurlJson -Method "GET" -Url "$base/api/blueprints/$($storageMergeAJson.id)" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Storage merge blueprint detail" -Actual $mergedStorageBlueprint.Status -Expected 200 -Body $mergedStorageBlueprint.Body
+    $mergedStorageBlueprintJson = Parse-JsonOrFail -Label "Storage merge blueprint detail" -Body $mergedStorageBlueprint.Body
+    if (@($mergedStorageBlueprintJson.crafters).Count -lt 1) {
+        Fail "Storage merge expected blueprint crafter assignments to move. Body: $($mergedStorageBlueprint.Body)"
+    }
+    Write-Pass "Storage merge carries storage and crafter data"
+
+    Write-Step "BLUEPRINT FLOW: rename and delete badges"
+    $renameBadgeBody = @{ from = $renameBadgeFrom; to = $renameBadgeTo } | ConvertTo-Json -Compress
+    $renameBadgeRes = Invoke-CurlJson -Method "POST" -Url "$base/api/blueprints/badges/rename" -Body $renameBadgeBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Blueprint badge rename" -Actual $renameBadgeRes.Status -Expected 200 -Body $renameBadgeRes.Body
+    $badgeBlueprintDetailAfterRename = Invoke-CurlJson -Method "GET" -Url "$base/api/blueprints/$($badgeBlueprintCreateJson.id)" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Blueprint detail after badge rename" -Actual $badgeBlueprintDetailAfterRename.Status -Expected 200 -Body $badgeBlueprintDetailAfterRename.Body
+    $badgeBlueprintDetailAfterRenameJson = Parse-JsonOrFail -Label "Blueprint detail after badge rename" -Body $badgeBlueprintDetailAfterRename.Body
+    if (-not (@($badgeBlueprintDetailAfterRenameJson.badges) -contains $renameBadgeTo)) {
+        Fail "Blueprint badge rename did not update badge list. Body: $($badgeBlueprintDetailAfterRename.Body)"
+    }
+
+    $deleteBadgeBody = @{ badge = $renameBadgeTo } | ConvertTo-Json -Compress
+    $deleteBadgeRes = Invoke-CurlJson -Method "POST" -Url "$base/api/blueprints/badges/delete" -Body $deleteBadgeBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Blueprint badge delete" -Actual $deleteBadgeRes.Status -Expected 200 -Body $deleteBadgeRes.Body
+    $badgeBlueprintDetailAfterDelete = Invoke-CurlJson -Method "GET" -Url "$base/api/blueprints/$($badgeBlueprintCreateJson.id)" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Blueprint detail after badge delete" -Actual $badgeBlueprintDetailAfterDelete.Status -Expected 200 -Body $badgeBlueprintDetailAfterDelete.Body
+    $badgeBlueprintDetailAfterDeleteJson = Parse-JsonOrFail -Label "Blueprint detail after badge delete" -Body $badgeBlueprintDetailAfterDelete.Body
+    if (@($badgeBlueprintDetailAfterDeleteJson.badges) -contains $renameBadgeTo) {
+        Fail "Blueprint badge delete did not remove badge. Body: $($badgeBlueprintDetailAfterDelete.Body)"
+    }
+    Write-Pass "Blueprint badge rename/delete OK"
+
+    Write-Step "QUEST TEMPLATE FLOW: create direct template and create quest from template"
+    $directTemplateTitle = "Smoke Template Direct $smokeSuffix"
+    $directTemplateBody = @{
+        title = $directTemplateTitle
+        description = "direct template"
+        handoverInfo = "smoke handover"
+    } | ConvertTo-Json -Compress
+    $directTemplateCreate = Invoke-CurlJson -Method "POST" -Url "$base/api/admin/quest-templates" -Body $directTemplateBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Create direct quest template" -Actual $directTemplateCreate.Status -Expected 200 -Body $directTemplateCreate.Body
+    $directTemplateCreateJson = Parse-JsonOrFail -Label "Create direct quest template" -Body $directTemplateCreate.Body
+
+    $directTemplateReqBody = @{ itemName = "Smoke Template Item"; qtyNeeded = 6; unit = "pcs" } | ConvertTo-Json -Compress
+    $directTemplateReqCreate = Invoke-CurlJson -Method "POST" -Url "$base/api/admin/quest-templates/$($directTemplateCreateJson.id)/requirements" -Body $directTemplateReqBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Create direct template requirement" -Actual $directTemplateReqCreate.Status -Expected 200 -Body $directTemplateReqCreate.Body
+    $directTemplateReqCreateJson = Parse-JsonOrFail -Label "Create direct template requirement" -Body $directTemplateReqCreate.Body
+    if (@($directTemplateReqCreateJson.requirements).Count -lt 1) {
+        Fail "Direct template expected at least one requirement after create. Body: $($directTemplateReqCreate.Body)"
+    }
+
+    $questFromTemplate = Invoke-CurlJson -Method "POST" -Url "$base/api/admin/quest-templates/$($directTemplateCreateJson.id)/create-quest" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Create quest from template" -Actual $questFromTemplate.Status -Expected 200 -Body $questFromTemplate.Body
+    $questFromTemplateJson = Parse-JsonOrFail -Label "Create quest from template" -Body $questFromTemplate.Body
+    $questFromTemplateRequirements = Invoke-CurlJson -Method "GET" -Url "$base/api/quests/$($questFromTemplateJson.id)/requirements" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Requirements of quest from template" -Actual $questFromTemplateRequirements.Status -Expected 200 -Body $questFromTemplateRequirements.Body
+    $questFromTemplateRequirementsJson = Parse-JsonOrFail -Label "Requirements of quest from template" -Body $questFromTemplateRequirements.Body
+    if (@($questFromTemplateRequirementsJson).Count -lt 1) {
+        Fail "Quest created from template expected copied requirements. Body: $($questFromTemplateRequirements.Body)"
+    }
+
+    Write-Step "QUEST TEMPLATE FLOW: create template from quest"
+    $templateFromQuest = Invoke-CurlJson -Method "POST" -Url "$base/api/quests/$($created.id)/template" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Create template from quest" -Actual $templateFromQuest.Status -Expected 200 -Body $templateFromQuest.Body
+    $templateFromQuestJson = Parse-JsonOrFail -Label "Create template from quest" -Body $templateFromQuest.Body
+    if (@($templateFromQuestJson.requirements).Count -lt 1) {
+        Fail "Template created from quest expected copied requirements. Body: $($templateFromQuest.Body)"
+    }
+
+    Write-Step "QUEST TEMPLATE FLOW: delete direct template"
+    $deleteDirectTemplate = Invoke-CurlJson -Method "DELETE" -Url "$base/api/admin/quest-templates/$($directTemplateCreateJson.id)" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Delete direct quest template" -Actual $deleteDirectTemplate.Status -Expected 204 -Body $deleteDirectTemplate.Body
+    Write-Pass "Quest template create/from quest/delete OK"
+
+    Write-Step "RETENTION FLOW: selected cleanup dry run for blueprint/storage progress tables"
+    $selectedCleanupDryRunBody = @{
+        dryRun = $true
+        targets = @("BLUEPRINT_CRAFTERS", "STORAGE_ENTRIES")
+    } | ConvertTo-Json -Compress
+    $selectedCleanupDryRun = Invoke-CurlJson -Method "POST" -Url "$base/api/admin/retention/selected-cleanup" -Body $selectedCleanupDryRunBody -CookieIn $cookieFile -TmpDir $tmpDir
+    if ($meJson.role -eq "superAdmin") {
+        Assert-HttpStatus -Label "Selected cleanup dry run" -Actual $selectedCleanupDryRun.Status -Expected 200 -Body $selectedCleanupDryRun.Body
+        $selectedCleanupDryRunJson = Parse-JsonOrFail -Label "Selected cleanup dry run" -Body $selectedCleanupDryRun.Body
+        if ($selectedCleanupDryRunJson.totalCandidateCount -lt 1) {
+            Fail "Selected cleanup dry run expected at least one candidate after blueprint/storage setup. Body: $($selectedCleanupDryRun.Body)"
+        }
+        Write-Pass "Selected cleanup dry run OK"
+    } else {
+        Assert-HttpStatus -Label "Selected cleanup dry run forbidden for non-superAdmin" -Actual $selectedCleanupDryRun.Status -Expected 403 -Body $selectedCleanupDryRun.Body
+        Write-Pass "Selected cleanup dry run role restriction OK"
+    }
+
+    Write-Step "ADMIN DATA TRANSFER: GET current token helper"
+    $currentTokenRes = Invoke-CurlJson -Method "GET" -Url "$base/api/admin/data/current-token" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Admin current token" -Actual $currentTokenRes.Status -Expected 200 -Body $currentTokenRes.Body
+    $currentTokenJson = Parse-JsonOrFail -Label "Admin current token" -Body $currentTokenRes.Body
+    if (-not $currentTokenJson.token) {
+        Fail "Admin current token endpoint returned no token. Body: $($currentTokenRes.Body)"
+    }
+    Write-Pass "Admin current token helper OK"
+
+    Write-Step "ADMIN DATA TRANSFER: remote transfer with selected sections"
+    $remoteSourceBaseUrl = $base
+    if ($base -match '^https?://localhost(?::\d+)?$' -or $base -match '^https?://127\.0\.0\.1(?::\d+)?$') {
+        $remoteSourceBaseUrl = "http://api:8080"
+    }
+    $remoteTransferBody = @{
+        sourceBaseURL = $remoteSourceBaseUrl
+        sourceToken = $loginJson.token
+        sections = @("blueprints", "blueprintCrafters", "storageLocations", "storageEntries", "questTemplates", "questTemplateRequirements")
+    } | ConvertTo-Json -Compress
+    $remoteTransfer = Invoke-CurlJson -Method "POST" -Url "$base/api/admin/data/transfer-remote" -Body $remoteTransferBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Admin remote transfer" -Actual $remoteTransfer.Status -Expected 200 -Body $remoteTransfer.Body
+    $remoteTransferJson = Parse-JsonOrFail -Label "Admin remote transfer" -Body $remoteTransfer.Body
+    if (@($remoteTransferJson.sections).Count -lt 6) {
+        Fail "Admin remote transfer expected selected sections in response. Body: $($remoteTransfer.Body)"
+    }
+    if ($remoteTransferJson.chunksFetched -lt 1) {
+        Fail "Admin remote transfer expected at least one fetched chunk. Body: $($remoteTransfer.Body)"
+    }
+    Write-Pass "Admin remote transfer selected sections OK"
+
     Write-Step "ADMIN DATA TRANSFER: GET $base/api/admin/data/export"
     $adminExport = Invoke-CurlJson -Method "GET" -Url "$base/api/admin/data/export" -CookieIn $cookieFile -TmpDir $tmpDir
     Assert-HttpStatus -Label "Admin data export" -Actual $adminExport.Status -Expected 200 -Body $adminExport.Body
@@ -590,6 +1103,7 @@ try {
         id = $importQuestId
         title = $importQuestTitle
         description = "imported by smoke test"
+        handoverInfo = $null
         status = "OPEN"
         terminalSinceAt = $null
         deletedAt = $null
@@ -598,6 +1112,7 @@ try {
         isApproved = $true
         approvedAt = $importQuestCreatedAt
         approvedByUserId = $meJson.userId
+        isPrioritized = $false
     }
     $importPayloadObject = [pscustomobject]@{
         version = 1
@@ -606,6 +1121,14 @@ try {
         quests = @($importQuest)
         requirements = @()
         contributions = @()
+        blueprints = @()
+        blueprintCrafters = @()
+        storageLocations = @()
+        storageEntries = @()
+        invites = @()
+        usernameChangeRequests = @()
+        questTemplates = @()
+        questTemplateRequirements = @()
         passwordResetRequests = @()
         passwordResetTokens = @()
         apiTokens = @()
@@ -650,6 +1173,7 @@ try {
         id = $splitQuestAId
         title = "Split Import Quest A " + (Get-Date -Format "yyyyMMdd-HHmmss")
         description = "split-import-a"
+        handoverInfo = $null
         status = "OPEN"
         terminalSinceAt = $null
         deletedAt = $null
@@ -658,11 +1182,13 @@ try {
         isApproved = $true
         approvedAt = $splitQuestCreatedAt
         approvedByUserId = $meJson.userId
+        isPrioritized = $false
     }
     $splitQuestB = [pscustomobject]@{
         id = $splitQuestBId
         title = "Split Import Quest B " + (Get-Date -Format "yyyyMMdd-HHmmss")
         description = "split-import-b"
+        handoverInfo = $null
         status = "OPEN"
         terminalSinceAt = $null
         deletedAt = $null
@@ -671,6 +1197,7 @@ try {
         isApproved = $true
         approvedAt = $splitQuestCreatedAt
         approvedByUserId = $meJson.userId
+        isPrioritized = $false
     }
 
     $splitPayloadA = [pscustomobject]@{
@@ -680,6 +1207,14 @@ try {
         quests = @($splitQuestA)
         requirements = @()
         contributions = @()
+        blueprints = @()
+        blueprintCrafters = @()
+        storageLocations = @()
+        storageEntries = @()
+        invites = @()
+        usernameChangeRequests = @()
+        questTemplates = @()
+        questTemplateRequirements = @()
         passwordResetRequests = @()
         passwordResetTokens = @()
         apiTokens = @()
@@ -692,6 +1227,14 @@ try {
         quests = @($splitQuestB)
         requirements = @()
         contributions = @()
+        blueprints = @()
+        blueprintCrafters = @()
+        storageLocations = @()
+        storageEntries = @()
+        invites = @()
+        usernameChangeRequests = @()
+        questTemplates = @()
+        questTemplateRequirements = @()
         passwordResetRequests = @()
         passwordResetTokens = @()
         apiTokens = @()
@@ -726,6 +1269,9 @@ try {
     if (-not $inviteCreateJson.token -or -not $inviteCreateJson.invite.id) {
         Fail "Invite create response missing token/invite.id. Body: $($inviteCreate.Body)"
     }
+    if ($inviteCreateJson.invite.role -ne "guest") {
+        Fail "Invite create expected enforced guest role. Body: $($inviteCreate.Body)"
+    }
     Write-Pass "Invite create OK"
 
     Write-Step "INVITE FLOW: register user by invite token"
@@ -742,6 +1288,9 @@ try {
     if ($registerByInviteJson.username -ne $inviteUserName) {
         Fail "Register by invite username mismatch. Body: $($registerByInvite.Body)"
     }
+    if ($registerByInviteJson.role -ne "guest") {
+        Fail "Register by invite expected guest role. Body: $($registerByInvite.Body)"
+    }
     Write-Pass "Register by invite OK"
 
     Write-Step "INVITE FLOW: login with invited user"
@@ -752,14 +1301,37 @@ try {
     $inviteLoginJson = Parse-JsonOrFail -Label "Login with invited user" -Body $inviteLogin.Body
     Write-Pass "Invited user login OK"
 
-    Write-Step "ACCOUNT FLOW: invited user reads own account"
-    $inviteAccount = Invoke-CurlJson -Method "GET" -Url "$base/api/account" -CookieIn $inviteCookieFile -TmpDir $tmpDir
-    Assert-HttpStatus -Label "Invited user account" -Actual $inviteAccount.Status -Expected 200 -Body $inviteAccount.Body
-    $inviteAccountJson = Parse-JsonOrFail -Label "Invited user account" -Body $inviteAccount.Body
-    if ($inviteAccountJson.username -ne $inviteUserName) {
-        Fail "Invited user account returned unexpected username. Body: $($inviteAccount.Body)"
+    Write-Step "GUEST FLOW: invited guest cannot access account endpoint"
+    $inviteAccountBlocked = Invoke-CurlJson -Method "GET" -Url "$base/api/account" -CookieIn $inviteCookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Invited guest account blocked" -Actual $inviteAccountBlocked.Status -Expected 403 -Body $inviteAccountBlocked.Body
+    Write-Pass "Invited guest account restriction OK"
+
+    Write-Step "ACCOUNT FLOW: promote invited guest to member"
+    $adminUsersForInvite = Invoke-CurlJson -Method "GET" -Url "$base/api/admin/users" -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Admin users list for invite promotion" -Actual $adminUsersForInvite.Status -Expected 200 -Body $adminUsersForInvite.Body
+    $adminUsersForInviteJson = Parse-JsonOrFail -Label "Admin users list for invite promotion" -Body $adminUsersForInvite.Body
+    $adminUsersForInviteArray = Ensure-ArrayOrFail -Label "Admin users list for invite promotion" -Value $adminUsersForInviteJson
+    $invitedUserFromList = $adminUsersForInviteArray | Where-Object { $_.username -eq $inviteUserName } | Select-Object -First 1
+    if ($null -eq $invitedUserFromList) {
+        Fail "Invited user not found in admin users list for promotion."
     }
-    Write-Pass "Invited user account OK"
+    $promoteInviteToMemberBody = @{ role = "member" } | ConvertTo-Json -Compress
+    $promoteInviteToMember = Invoke-CurlJson -Method "PATCH" -Url "$base/api/admin/users/$($invitedUserFromList.id)/role" -Body $promoteInviteToMemberBody -CookieIn $cookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Promote invited guest to member" -Actual $promoteInviteToMember.Status -Expected 200 -Body $promoteInviteToMember.Body
+    $promoteInviteToMemberJson = Parse-JsonOrFail -Label "Promote invited guest to member" -Body $promoteInviteToMember.Body
+    if ($promoteInviteToMemberJson.role -ne "member") {
+        Fail "Invited guest expected member role after promotion. Body: $($promoteInviteToMember.Body)"
+    }
+    Write-Pass "Invited guest promoted to member"
+
+    Write-Step "ACCOUNT FLOW: promoted invited user reads own account"
+    $inviteAccount = Invoke-CurlJson -Method "GET" -Url "$base/api/account" -CookieIn $inviteCookieFile -TmpDir $tmpDir
+    Assert-HttpStatus -Label "Promoted invited user account" -Actual $inviteAccount.Status -Expected 200 -Body $inviteAccount.Body
+    $inviteAccountJson = Parse-JsonOrFail -Label "Promoted invited user account" -Body $inviteAccount.Body
+    if ($inviteAccountJson.username -ne $inviteUserName) {
+        Fail "Promoted invited user account returned unexpected username. Body: $($inviteAccount.Body)"
+    }
+    Write-Pass "Promoted invited user account OK"
 
     $renamedInviteUserName = "$inviteUserName-renamed"
     Write-Step "ACCOUNT FLOW: invited user requests username change"
@@ -928,6 +1500,13 @@ try {
     exit 0
 }
 finally {
+    try {
+        Cleanup-SmokeArtifacts -Base $base -TmpDir $tmpDir -AdminUsername $Username -AdminPassword $Password -PreserveMemberUsername $MemberUsername
+    }
+    catch {
+        Write-Host "[WARN] Cleanup failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+
     if (Test-Path $tmpDir) {
         Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
     }

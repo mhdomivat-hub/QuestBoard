@@ -25,6 +25,7 @@ enum RetentionComputation {
 enum RetentionCleanupTarget: String, CaseIterable {
     case questContributions = "QUEST_CONTRIBUTIONS"
     case blueprintCrafters = "BLUEPRINT_CRAFTERS"
+    case storageEntries = "STORAGE_ENTRIES"
     case invites = "INVITES"
     case passwordResets = "PASSWORD_RESETS"
     case usernameChangeRequests = "USERNAME_CHANGE_REQUESTS"
@@ -35,6 +36,8 @@ enum RetentionCleanupTarget: String, CaseIterable {
             return "Quest Contributions"
         case .blueprintCrafters:
             return "Blueprint Crafter-Zuordnungen"
+        case .storageEntries:
+            return "Storage Eintraege"
         case .invites:
             return "Invites"
         case .passwordResets:
@@ -51,6 +54,8 @@ enum RetentionCleanupTarget: String, CaseIterable {
             query = "SELECT COUNT(*)::int AS c FROM contributions"
         case .blueprintCrafters:
             query = "SELECT COUNT(*)::int AS c FROM blueprint_crafters"
+        case .storageEntries:
+            query = "SELECT COUNT(*)::int AS c FROM storage_entries"
         case .invites:
             query = "SELECT COUNT(*)::int AS c FROM invites"
         case .passwordResets:
@@ -75,6 +80,9 @@ enum RetentionCleanupTarget: String, CaseIterable {
             return rows.count
         case .blueprintCrafters:
             let rows = try await sql.raw("DELETE FROM blueprint_crafters RETURNING blueprint_id").all()
+            return rows.count
+        case .storageEntries:
+            let rows = try await sql.raw("DELETE FROM storage_entries RETURNING id").all()
             return rows.count
         case .invites:
             let rows = try await sql.raw("DELETE FROM invites RETURNING id").all()
@@ -170,6 +178,11 @@ func cleanupSelectedData(_ req: Request) async throws -> RetentionSelectionClean
         .sorted { $0.rawValue < $1.rawValue }
     guard !requestedTargets.isEmpty else {
         throw Abort(.badRequest, reason: "At least one cleanup target is required")
+    }
+
+    let requiresSuperAdmin = requestedTargets.contains(.blueprintCrafters) || requestedTargets.contains(.storageEntries)
+    if requiresSuperAdmin, actor.role != .superAdmin {
+        throw Abort(.forbidden, reason: "Only super admins may wipe blueprint crafters or storage entries")
     }
 
     var results: [RetentionSelectionCleanupTargetResultDTO] = []

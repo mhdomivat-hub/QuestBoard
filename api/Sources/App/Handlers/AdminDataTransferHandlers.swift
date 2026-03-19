@@ -38,7 +38,7 @@ func exportAllData(_ req: Request) async throws -> AdminDataExportDTO {
 
     let userRows = try await sql.raw("SELECT id, username, password_hash, role FROM users ORDER BY username ASC").all()
     let questRows = try await sql.raw("""
-        SELECT id, title, description, handover_info, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id
+        SELECT id, title, description, handover_info, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id, is_prioritized
         FROM quests
         ORDER BY created_at ASC NULLS LAST, id ASC
         """).all()
@@ -47,6 +47,46 @@ func exportAllData(_ req: Request) async throws -> AdminDataExportDTO {
         SELECT id, requirement_id, user_id, qty, status, note, created_at
         FROM contributions
         ORDER BY created_at ASC NULLS LAST, id ASC
+        """).all()
+    let blueprintRows = try await sql.raw("""
+        SELECT id, parent_id, name, description, item_code, badges_csv, category, is_craftable, created_at, updated_at
+        FROM blueprints
+        ORDER BY created_at ASC NULLS LAST, id ASC
+        """).all()
+    let blueprintCrafterRows = try await sql.raw("""
+        SELECT id, blueprint_id, user_id, created_at
+        FROM blueprint_crafters
+        ORDER BY created_at ASC NULLS LAST, id ASC
+        """).all()
+    let storageLocationRows = try await sql.raw("""
+        SELECT id, parent_id, name, description, created_at, updated_at
+        FROM storage_locations
+        ORDER BY created_at ASC NULLS LAST, id ASC
+        """).all()
+    let storageEntryRows = try await sql.raw("""
+        SELECT id, item_id, location_id, user_id, qty, note, created_at
+        FROM storage_entries
+        ORDER BY created_at ASC NULLS LAST, id ASC
+        """).all()
+    let inviteRows = try await sql.raw("""
+        SELECT id, token_hash, raw_token, role, max_uses, use_count, created_by_user_id, used_by_user_id, expires_at, used_at, revoked_at, created_at
+        FROM invites
+        ORDER BY created_at ASC NULLS LAST, id ASC
+        """).all()
+    let usernameChangeRequestRows = try await sql.raw("""
+        SELECT id, user_id, current_username, desired_username, status, reviewed_by, reviewed_at, created_at
+        FROM username_change_requests
+        ORDER BY created_at ASC NULLS LAST, id ASC
+        """).all()
+    let questTemplateRows = try await sql.raw("""
+        SELECT id, title, description, handover_info, source_quest_id, created_at
+        FROM quest_templates
+        ORDER BY created_at ASC NULLS LAST, id ASC
+        """).all()
+    let questTemplateRequirementRows = try await sql.raw("""
+        SELECT id, template_id, item_name, qty_needed, unit
+        FROM quest_template_requirements
+        ORDER BY item_name ASC, id ASC
         """).all()
     let requestRows = try await sql.raw("""
         SELECT id, user_id, status, approved_by, note, approved_at, created_at
@@ -71,95 +111,203 @@ func exportAllData(_ req: Request) async throws -> AdminDataExportDTO {
 
     await recordAuditEvent(on: req, actor: actor, action: "admin.data.export", entityType: "system")
 
-    return .init(
+    let exportedUsers = try userRows.map {
+        AdminExportUserDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            username: try $0.decode(column: "username", as: String.self),
+            passwordHash: try $0.decode(column: "password_hash", as: String.self),
+            role: try $0.decode(column: "role", as: String.self)
+        )
+    }
+    let exportedQuests = try questRows.map {
+        AdminExportQuestDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            title: try $0.decode(column: "title", as: String.self),
+            description: try $0.decode(column: "description", as: String.self),
+            handoverInfo: try decodeOptionalString($0, column: "handover_info"),
+            status: try $0.decode(column: "status", as: String.self),
+            terminalSinceAt: try decodeOptionalDate($0, column: "terminal_since_at"),
+            deletedAt: try decodeOptionalDate($0, column: "deleted_at"),
+            createdAt: try decodeOptionalDate($0, column: "created_at"),
+            createdByUserId: try decodeOptionalUUID($0, column: "created_by_user_id"),
+            isApproved: try $0.decode(column: "is_approved", as: Bool.self),
+            approvedAt: try decodeOptionalDate($0, column: "approved_at"),
+            approvedByUserId: try decodeOptionalUUID($0, column: "approved_by_user_id"),
+            isPrioritized: try $0.decode(column: "is_prioritized", as: Bool.self)
+        )
+    }
+    let exportedRequirements = try requirementRows.map {
+        AdminExportRequirementDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            questId: try $0.decode(column: "quest_id", as: UUID.self),
+            itemName: try $0.decode(column: "item_name", as: String.self),
+            qtyNeeded: try $0.decode(column: "qty_needed", as: Int.self),
+            unit: try $0.decode(column: "unit", as: String.self)
+        )
+    }
+    let exportedContributions = try contributionRows.map {
+        AdminExportContributionDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            requirementId: try $0.decode(column: "requirement_id", as: UUID.self),
+            userId: try $0.decode(column: "user_id", as: UUID.self),
+            qty: try $0.decode(column: "qty", as: Int.self),
+            status: try $0.decode(column: "status", as: String.self),
+            note: try decodeOptionalString($0, column: "note"),
+            createdAt: try decodeOptionalDate($0, column: "created_at")
+        )
+    }
+    let exportedBlueprints = try blueprintRows.map {
+        AdminExportBlueprintDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            parentId: try decodeOptionalUUID($0, column: "parent_id"),
+            name: try $0.decode(column: "name", as: String.self),
+            description: try decodeOptionalString($0, column: "description"),
+            itemCode: try decodeOptionalString($0, column: "item_code"),
+            badgesCSV: try decodeOptionalString($0, column: "badges_csv"),
+            category: try $0.decode(column: "category", as: String.self),
+            isCraftable: try $0.decode(column: "is_craftable", as: Bool.self),
+            createdAt: try decodeOptionalDate($0, column: "created_at"),
+            updatedAt: try decodeOptionalDate($0, column: "updated_at")
+        )
+    }
+    let exportedBlueprintCrafters = try blueprintCrafterRows.map {
+        AdminExportBlueprintCrafterDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            blueprintId: try $0.decode(column: "blueprint_id", as: UUID.self),
+            userId: try $0.decode(column: "user_id", as: UUID.self),
+            createdAt: try decodeOptionalDate($0, column: "created_at")
+        )
+    }
+    let exportedStorageLocations = try storageLocationRows.map {
+        AdminExportStorageLocationDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            parentId: try decodeOptionalUUID($0, column: "parent_id"),
+            name: try $0.decode(column: "name", as: String.self),
+            description: try decodeOptionalString($0, column: "description"),
+            createdAt: try decodeOptionalDate($0, column: "created_at"),
+            updatedAt: try decodeOptionalDate($0, column: "updated_at")
+        )
+    }
+    let exportedStorageEntries = try storageEntryRows.map {
+        AdminExportStorageEntryDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            itemId: try $0.decode(column: "item_id", as: UUID.self),
+            locationId: try $0.decode(column: "location_id", as: UUID.self),
+            userId: try $0.decode(column: "user_id", as: UUID.self),
+            qty: try $0.decode(column: "qty", as: Int.self),
+            note: try decodeOptionalString($0, column: "note"),
+            createdAt: try decodeOptionalDate($0, column: "created_at")
+        )
+    }
+    let exportedInvites = try inviteRows.map {
+        AdminExportInviteDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            tokenHash: try $0.decode(column: "token_hash", as: String.self),
+            rawToken: try decodeOptionalString($0, column: "raw_token"),
+            role: try $0.decode(column: "role", as: String.self),
+            maxUses: try $0.decode(column: "max_uses", as: Int.self),
+            useCount: try $0.decode(column: "use_count", as: Int.self),
+            createdByUserId: try $0.decode(column: "created_by_user_id", as: UUID.self),
+            usedByUserId: try decodeOptionalUUID($0, column: "used_by_user_id"),
+            expiresAt: try $0.decode(column: "expires_at", as: Date.self),
+            usedAt: try decodeOptionalDate($0, column: "used_at"),
+            revokedAt: try decodeOptionalDate($0, column: "revoked_at"),
+            createdAt: try $0.decode(column: "created_at", as: Date.self)
+        )
+    }
+    let exportedUsernameChangeRequests = try usernameChangeRequestRows.map {
+        AdminExportUsernameChangeRequestDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            userId: try $0.decode(column: "user_id", as: UUID.self),
+            currentUsername: try $0.decode(column: "current_username", as: String.self),
+            desiredUsername: try $0.decode(column: "desired_username", as: String.self),
+            status: try $0.decode(column: "status", as: String.self),
+            reviewedBy: try decodeOptionalUUID($0, column: "reviewed_by"),
+            reviewedAt: try decodeOptionalDate($0, column: "reviewed_at"),
+            createdAt: try decodeOptionalDate($0, column: "created_at")
+        )
+    }
+    let exportedQuestTemplates = try questTemplateRows.map {
+        AdminExportQuestTemplateDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            title: try $0.decode(column: "title", as: String.self),
+            description: try $0.decode(column: "description", as: String.self),
+            handoverInfo: try decodeOptionalString($0, column: "handover_info"),
+            sourceQuestId: try decodeOptionalUUID($0, column: "source_quest_id"),
+            createdAt: try decodeOptionalDate($0, column: "created_at")
+        )
+    }
+    let exportedQuestTemplateRequirements = try questTemplateRequirementRows.map {
+        AdminExportQuestTemplateRequirementDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            templateId: try $0.decode(column: "template_id", as: UUID.self),
+            itemName: try $0.decode(column: "item_name", as: String.self),
+            qtyNeeded: try $0.decode(column: "qty_needed", as: Int.self),
+            unit: try $0.decode(column: "unit", as: String.self)
+        )
+    }
+    let exportedPasswordResetRequests = try requestRows.map {
+        AdminExportPasswordResetRequestDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            userId: try $0.decode(column: "user_id", as: UUID.self),
+            status: try $0.decode(column: "status", as: String.self),
+            approvedBy: try decodeOptionalUUID($0, column: "approved_by"),
+            note: try decodeOptionalString($0, column: "note"),
+            approvedAt: try decodeOptionalDate($0, column: "approved_at"),
+            createdAt: try decodeOptionalDate($0, column: "created_at")
+        )
+    }
+    let exportedPasswordResetTokens = try resetTokenRows.map {
+        AdminExportPasswordResetTokenDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            requestId: try $0.decode(column: "request_id", as: UUID.self),
+            tokenHash: try $0.decode(column: "token_hash", as: String.self),
+            expiresAt: try $0.decode(column: "expires_at", as: Date.self),
+            usedAt: try decodeOptionalDate($0, column: "used_at"),
+            createdAt: try decodeOptionalDate($0, column: "created_at")
+        )
+    }
+    let exportedAPITokens = try apiTokenRows.map {
+        AdminExportAPITokenDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            userId: try $0.decode(column: "user_id", as: UUID.self),
+            tokenHash: try $0.decode(column: "token_hash", as: String.self),
+            expiresAt: try $0.decode(column: "expires_at", as: Date.self),
+            createdAt: try decodeOptionalDate($0, column: "created_at")
+        )
+    }
+    let exportedAuditEvents = try auditRows.map {
+        AdminExportAuditEventDTO(
+            id: try $0.decode(column: "id", as: UUID.self),
+            actorUserId: try decodeOptionalUUID($0, column: "actor_user_id"),
+            actorUsername: try $0.decode(column: "actor_username", as: String.self),
+            action: try $0.decode(column: "action", as: String.self),
+            entityType: try $0.decode(column: "entity_type", as: String.self),
+            entityId: try decodeOptionalUUID($0, column: "entity_id"),
+            details: try decodeOptionalString($0, column: "details"),
+            createdAt: try decodeOptionalDate($0, column: "created_at")
+        )
+    }
+
+    return AdminDataExportDTO(
         version: 1,
         generatedAt: Date(),
-        users: try userRows.map {
-            .init(
-                id: try $0.decode(column: "id", as: UUID.self),
-                username: try $0.decode(column: "username", as: String.self),
-                passwordHash: try $0.decode(column: "password_hash", as: String.self),
-                role: try $0.decode(column: "role", as: String.self)
-            )
-        },
-        quests: try questRows.map {
-            .init(
-                id: try $0.decode(column: "id", as: UUID.self),
-                title: try $0.decode(column: "title", as: String.self),
-                description: try $0.decode(column: "description", as: String.self),
-                handoverInfo: try decodeOptionalString($0, column: "handover_info"),
-                status: try $0.decode(column: "status", as: String.self),
-                terminalSinceAt: try decodeOptionalDate($0, column: "terminal_since_at"),
-                deletedAt: try decodeOptionalDate($0, column: "deleted_at"),
-                createdAt: try decodeOptionalDate($0, column: "created_at"),
-                createdByUserId: try decodeOptionalUUID($0, column: "created_by_user_id"),
-                isApproved: try $0.decode(column: "is_approved", as: Bool.self),
-                approvedAt: try decodeOptionalDate($0, column: "approved_at"),
-                approvedByUserId: try decodeOptionalUUID($0, column: "approved_by_user_id")
-            )
-        },
-        requirements: try requirementRows.map {
-            .init(
-                id: try $0.decode(column: "id", as: UUID.self),
-                questId: try $0.decode(column: "quest_id", as: UUID.self),
-                itemName: try $0.decode(column: "item_name", as: String.self),
-                qtyNeeded: try $0.decode(column: "qty_needed", as: Int.self),
-                unit: try $0.decode(column: "unit", as: String.self)
-            )
-        },
-        contributions: try contributionRows.map {
-            .init(
-                id: try $0.decode(column: "id", as: UUID.self),
-                requirementId: try $0.decode(column: "requirement_id", as: UUID.self),
-                userId: try $0.decode(column: "user_id", as: UUID.self),
-                qty: try $0.decode(column: "qty", as: Int.self),
-                status: try $0.decode(column: "status", as: String.self),
-                note: try decodeOptionalString($0, column: "note"),
-                createdAt: try decodeOptionalDate($0, column: "created_at")
-            )
-        },
-        passwordResetRequests: try requestRows.map {
-            .init(
-                id: try $0.decode(column: "id", as: UUID.self),
-                userId: try $0.decode(column: "user_id", as: UUID.self),
-                status: try $0.decode(column: "status", as: String.self),
-                approvedBy: try decodeOptionalUUID($0, column: "approved_by"),
-                note: try decodeOptionalString($0, column: "note"),
-                approvedAt: try decodeOptionalDate($0, column: "approved_at"),
-                createdAt: try decodeOptionalDate($0, column: "created_at")
-            )
-        },
-        passwordResetTokens: try resetTokenRows.map {
-            .init(
-                id: try $0.decode(column: "id", as: UUID.self),
-                requestId: try $0.decode(column: "request_id", as: UUID.self),
-                tokenHash: try $0.decode(column: "token_hash", as: String.self),
-                expiresAt: try $0.decode(column: "expires_at", as: Date.self),
-                usedAt: try decodeOptionalDate($0, column: "used_at"),
-                createdAt: try decodeOptionalDate($0, column: "created_at")
-            )
-        },
-        apiTokens: try apiTokenRows.map {
-            .init(
-                id: try $0.decode(column: "id", as: UUID.self),
-                userId: try $0.decode(column: "user_id", as: UUID.self),
-                tokenHash: try $0.decode(column: "token_hash", as: String.self),
-                expiresAt: try $0.decode(column: "expires_at", as: Date.self),
-                createdAt: try decodeOptionalDate($0, column: "created_at")
-            )
-        },
-        auditEvents: try auditRows.map {
-            .init(
-                id: try $0.decode(column: "id", as: UUID.self),
-                actorUserId: try decodeOptionalUUID($0, column: "actor_user_id"),
-                actorUsername: try $0.decode(column: "actor_username", as: String.self),
-                action: try $0.decode(column: "action", as: String.self),
-                entityType: try $0.decode(column: "entity_type", as: String.self),
-                entityId: try decodeOptionalUUID($0, column: "entity_id"),
-                details: try decodeOptionalString($0, column: "details"),
-                createdAt: try decodeOptionalDate($0, column: "created_at")
-            )
-        }
+        users: exportedUsers,
+        quests: exportedQuests,
+        requirements: exportedRequirements,
+        contributions: exportedContributions,
+        blueprints: exportedBlueprints,
+        blueprintCrafters: exportedBlueprintCrafters,
+        storageLocations: exportedStorageLocations,
+        storageEntries: exportedStorageEntries,
+        invites: exportedInvites,
+        usernameChangeRequests: exportedUsernameChangeRequests,
+        questTemplates: exportedQuestTemplates,
+        questTemplateRequirements: exportedQuestTemplateRequirements,
+        passwordResetRequests: exportedPasswordResetRequests,
+        passwordResetTokens: exportedPasswordResetTokens,
+        apiTokens: exportedAPITokens,
+        auditEvents: exportedAuditEvents
     )
 }
 
@@ -176,6 +324,13 @@ private func makeEmptyExport(version: Int = 1, generatedAt: Date = Date()) -> Ad
         apiTokens: [],
         auditEvents: []
     )
+}
+
+private func encodeTransferPayload<T: Encodable>(_ value: T) throws -> ByteBuffer {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let data = try encoder.encode(value)
+    return ByteBuffer(data: data)
 }
 
 private func parseLimit(_ req: Request) -> Int {
@@ -208,6 +363,14 @@ func exportDataManifest(_ req: Request) async throws -> AdminDataExportManifestD
             quests: try await countAllRows(sql: sql, table: "quests"),
             requirements: try await countAllRows(sql: sql, table: "requirements"),
             contributions: try await countAllRows(sql: sql, table: "contributions"),
+            blueprints: try await countAllRows(sql: sql, table: "blueprints"),
+            blueprintCrafters: try await countAllRows(sql: sql, table: "blueprint_crafters"),
+            storageLocations: try await countAllRows(sql: sql, table: "storage_locations"),
+            storageEntries: try await countAllRows(sql: sql, table: "storage_entries"),
+            invites: try await countAllRows(sql: sql, table: "invites"),
+            usernameChangeRequests: try await countAllRows(sql: sql, table: "username_change_requests"),
+            questTemplates: try await countAllRows(sql: sql, table: "quest_templates"),
+            questTemplateRequirements: try await countAllRows(sql: sql, table: "quest_template_requirements"),
             passwordResetRequests: try await countAllRows(sql: sql, table: "password_reset_requests"),
             passwordResetTokens: try await countAllRows(sql: sql, table: "password_reset_tokens"),
             apiTokens: try await countAllRows(sql: sql, table: "api_tokens"),
@@ -216,16 +379,14 @@ func exportDataManifest(_ req: Request) async throws -> AdminDataExportManifestD
     )
 }
 
-func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
-    let _ = try requireSuperAdmin(req)
-    guard let sql = req.db as? SQLDatabase else {
-        throw Abort(.internalServerError, reason: "SQL database unavailable")
-    }
-
-    let section = (try req.parameters.require("section")).lowercased()
-    let limit = parseLimit(req)
-    let offset = parseOffset(req)
-    let generatedAt = Date()
+private func exportDataSectionPayload(
+    sql: SQLDatabase,
+    section: String,
+    limit: Int,
+    offset: Int,
+    generatedAt: Date = Date()
+) async throws -> AdminDataExportDTO {
+    let section = section.lowercased()
     var result = makeEmptyExport(generatedAt: generatedAt)
 
     switch section {
@@ -257,7 +418,7 @@ func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
         )
     case "quests":
         let rows = try await sql.raw("""
-            SELECT id, title, description, handover_info, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id
+            SELECT id, title, description, handover_info, status, terminal_since_at, deleted_at, created_at, created_by_user_id, is_approved, approved_at, approved_by_user_id, is_prioritized
             FROM quests
             ORDER BY created_at ASC NULLS LAST, id ASC
             LIMIT \(bind: limit) OFFSET \(bind: offset)
@@ -279,7 +440,8 @@ func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
                     createdByUserId: try decodeOptionalUUID($0, column: "created_by_user_id"),
                     isApproved: try $0.decode(column: "is_approved", as: Bool.self),
                     approvedAt: try decodeOptionalDate($0, column: "approved_at"),
-                    approvedByUserId: try decodeOptionalUUID($0, column: "approved_by_user_id")
+                    approvedByUserId: try decodeOptionalUUID($0, column: "approved_by_user_id"),
+                    isPrioritized: try $0.decode(column: "is_prioritized", as: Bool.self)
                 )
             },
             requirements: [],
@@ -338,6 +500,248 @@ func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
                     status: try $0.decode(column: "status", as: String.self),
                     note: try decodeOptionalString($0, column: "note"),
                     createdAt: try decodeOptionalDate($0, column: "created_at")
+                )
+            },
+            passwordResetRequests: [],
+            passwordResetTokens: [],
+            apiTokens: [],
+            auditEvents: []
+        )
+    case "blueprints":
+        let rows = try await sql.raw("""
+            SELECT id, parent_id, name, description, item_code, badges_csv, category, is_craftable, created_at, updated_at
+            FROM blueprints
+            ORDER BY created_at ASC NULLS LAST, id ASC
+            LIMIT \(bind: limit) OFFSET \(bind: offset)
+            """).all()
+        result = .init(
+            version: 1,
+            generatedAt: generatedAt,
+            users: [],
+            quests: [],
+            requirements: [],
+            contributions: [],
+            blueprints: try rows.map {
+                .init(
+                    id: try $0.decode(column: "id", as: UUID.self),
+                    parentId: try decodeOptionalUUID($0, column: "parent_id"),
+                    name: try $0.decode(column: "name", as: String.self),
+                    description: try decodeOptionalString($0, column: "description"),
+                    itemCode: try decodeOptionalString($0, column: "item_code"),
+                    badgesCSV: try decodeOptionalString($0, column: "badges_csv"),
+                    category: try $0.decode(column: "category", as: String.self),
+                    isCraftable: try $0.decode(column: "is_craftable", as: Bool.self),
+                    createdAt: try decodeOptionalDate($0, column: "created_at"),
+                    updatedAt: try decodeOptionalDate($0, column: "updated_at")
+                )
+            },
+            passwordResetRequests: [],
+            passwordResetTokens: [],
+            apiTokens: [],
+            auditEvents: []
+        )
+    case "blueprintcrafters":
+        let rows = try await sql.raw("""
+            SELECT id, blueprint_id, user_id, created_at
+            FROM blueprint_crafters
+            ORDER BY created_at ASC NULLS LAST, id ASC
+            LIMIT \(bind: limit) OFFSET \(bind: offset)
+            """).all()
+        result = .init(
+            version: 1,
+            generatedAt: generatedAt,
+            users: [],
+            quests: [],
+            requirements: [],
+            contributions: [],
+            blueprintCrafters: try rows.map {
+                .init(
+                    id: try $0.decode(column: "id", as: UUID.self),
+                    blueprintId: try $0.decode(column: "blueprint_id", as: UUID.self),
+                    userId: try $0.decode(column: "user_id", as: UUID.self),
+                    createdAt: try decodeOptionalDate($0, column: "created_at")
+                )
+            },
+            passwordResetRequests: [],
+            passwordResetTokens: [],
+            apiTokens: [],
+            auditEvents: []
+        )
+    case "storagelocations":
+        let rows = try await sql.raw("""
+            SELECT id, parent_id, name, description, created_at, updated_at
+            FROM storage_locations
+            ORDER BY created_at ASC NULLS LAST, id ASC
+            LIMIT \(bind: limit) OFFSET \(bind: offset)
+            """).all()
+        result = .init(
+            version: 1,
+            generatedAt: generatedAt,
+            users: [],
+            quests: [],
+            requirements: [],
+            contributions: [],
+            storageLocations: try rows.map {
+                .init(
+                    id: try $0.decode(column: "id", as: UUID.self),
+                    parentId: try decodeOptionalUUID($0, column: "parent_id"),
+                    name: try $0.decode(column: "name", as: String.self),
+                    description: try decodeOptionalString($0, column: "description"),
+                    createdAt: try decodeOptionalDate($0, column: "created_at"),
+                    updatedAt: try decodeOptionalDate($0, column: "updated_at")
+                )
+            },
+            passwordResetRequests: [],
+            passwordResetTokens: [],
+            apiTokens: [],
+            auditEvents: []
+        )
+    case "storageentries":
+        let rows = try await sql.raw("""
+            SELECT id, item_id, location_id, user_id, qty, note, created_at
+            FROM storage_entries
+            ORDER BY created_at ASC NULLS LAST, id ASC
+            LIMIT \(bind: limit) OFFSET \(bind: offset)
+            """).all()
+        result = .init(
+            version: 1,
+            generatedAt: generatedAt,
+            users: [],
+            quests: [],
+            requirements: [],
+            contributions: [],
+            storageEntries: try rows.map {
+                .init(
+                    id: try $0.decode(column: "id", as: UUID.self),
+                    itemId: try $0.decode(column: "item_id", as: UUID.self),
+                    locationId: try $0.decode(column: "location_id", as: UUID.self),
+                    userId: try $0.decode(column: "user_id", as: UUID.self),
+                    qty: try $0.decode(column: "qty", as: Int.self),
+                    note: try decodeOptionalString($0, column: "note"),
+                    createdAt: try decodeOptionalDate($0, column: "created_at")
+                )
+            },
+            passwordResetRequests: [],
+            passwordResetTokens: [],
+            apiTokens: [],
+            auditEvents: []
+        )
+    case "invites":
+        let rows = try await sql.raw("""
+            SELECT id, token_hash, raw_token, role, max_uses, use_count, created_by_user_id, used_by_user_id, expires_at, used_at, revoked_at, created_at
+            FROM invites
+            ORDER BY created_at ASC NULLS LAST, id ASC
+            LIMIT \(bind: limit) OFFSET \(bind: offset)
+            """).all()
+        result = .init(
+            version: 1,
+            generatedAt: generatedAt,
+            users: [],
+            quests: [],
+            requirements: [],
+            contributions: [],
+            invites: try rows.map {
+                .init(
+                    id: try $0.decode(column: "id", as: UUID.self),
+                    tokenHash: try $0.decode(column: "token_hash", as: String.self),
+                    rawToken: try decodeOptionalString($0, column: "raw_token"),
+                    role: try $0.decode(column: "role", as: String.self),
+                    maxUses: try $0.decode(column: "max_uses", as: Int.self),
+                    useCount: try $0.decode(column: "use_count", as: Int.self),
+                    createdByUserId: try $0.decode(column: "created_by_user_id", as: UUID.self),
+                    usedByUserId: try decodeOptionalUUID($0, column: "used_by_user_id"),
+                    expiresAt: try $0.decode(column: "expires_at", as: Date.self),
+                    usedAt: try decodeOptionalDate($0, column: "used_at"),
+                    revokedAt: try decodeOptionalDate($0, column: "revoked_at"),
+                    createdAt: try $0.decode(column: "created_at", as: Date.self)
+                )
+            },
+            passwordResetRequests: [],
+            passwordResetTokens: [],
+            apiTokens: [],
+            auditEvents: []
+        )
+    case "usernamechangerequests":
+        let rows = try await sql.raw("""
+            SELECT id, user_id, current_username, desired_username, status, reviewed_by, reviewed_at, created_at
+            FROM username_change_requests
+            ORDER BY created_at ASC NULLS LAST, id ASC
+            LIMIT \(bind: limit) OFFSET \(bind: offset)
+            """).all()
+        result = .init(
+            version: 1,
+            generatedAt: generatedAt,
+            users: [],
+            quests: [],
+            requirements: [],
+            contributions: [],
+            usernameChangeRequests: try rows.map {
+                .init(
+                    id: try $0.decode(column: "id", as: UUID.self),
+                    userId: try $0.decode(column: "user_id", as: UUID.self),
+                    currentUsername: try $0.decode(column: "current_username", as: String.self),
+                    desiredUsername: try $0.decode(column: "desired_username", as: String.self),
+                    status: try $0.decode(column: "status", as: String.self),
+                    reviewedBy: try decodeOptionalUUID($0, column: "reviewed_by"),
+                    reviewedAt: try decodeOptionalDate($0, column: "reviewed_at"),
+                    createdAt: try decodeOptionalDate($0, column: "created_at")
+                )
+            },
+            passwordResetRequests: [],
+            passwordResetTokens: [],
+            apiTokens: [],
+            auditEvents: []
+        )
+    case "questtemplates":
+        let rows = try await sql.raw("""
+            SELECT id, title, description, handover_info, source_quest_id, created_at
+            FROM quest_templates
+            ORDER BY created_at ASC NULLS LAST, id ASC
+            LIMIT \(bind: limit) OFFSET \(bind: offset)
+            """).all()
+        result = .init(
+            version: 1,
+            generatedAt: generatedAt,
+            users: [],
+            quests: [],
+            requirements: [],
+            contributions: [],
+            questTemplates: try rows.map {
+                .init(
+                    id: try $0.decode(column: "id", as: UUID.self),
+                    title: try $0.decode(column: "title", as: String.self),
+                    description: try $0.decode(column: "description", as: String.self),
+                    handoverInfo: try decodeOptionalString($0, column: "handover_info"),
+                    sourceQuestId: try decodeOptionalUUID($0, column: "source_quest_id"),
+                    createdAt: try decodeOptionalDate($0, column: "created_at")
+                )
+            },
+            passwordResetRequests: [],
+            passwordResetTokens: [],
+            apiTokens: [],
+            auditEvents: []
+        )
+    case "questtemplaterequirements":
+        let rows = try await sql.raw("""
+            SELECT id, template_id, item_name, qty_needed, unit
+            FROM quest_template_requirements
+            ORDER BY item_name ASC, id ASC
+            LIMIT \(bind: limit) OFFSET \(bind: offset)
+            """).all()
+        result = .init(
+            version: 1,
+            generatedAt: generatedAt,
+            users: [],
+            quests: [],
+            requirements: [],
+            contributions: [],
+            questTemplateRequirements: try rows.map {
+                .init(
+                    id: try $0.decode(column: "id", as: UUID.self),
+                    templateId: try $0.decode(column: "template_id", as: UUID.self),
+                    itemName: try $0.decode(column: "item_name", as: String.self),
+                    qtyNeeded: try $0.decode(column: "qty_needed", as: Int.self),
+                    unit: try $0.decode(column: "unit", as: String.self)
                 )
             },
             passwordResetRequests: [],
@@ -466,13 +870,25 @@ func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
     return result
 }
 
-func importAllData(_ req: Request) async throws -> AdminDataImportResultDTO {
-    let actor = try requireSuperAdmin(req)
-    let payload = try req.content.decode(AdminDataExportDTO.self)
+func exportDataSection(_ req: Request) async throws -> AdminDataExportDTO {
+    let _ = try requireSuperAdmin(req)
     guard let sql = req.db as? SQLDatabase else {
         throw Abort(.internalServerError, reason: "SQL database unavailable")
     }
 
+    let section = try req.parameters.require("section")
+    let limit = parseLimit(req)
+    let offset = parseOffset(req)
+    return try await exportDataSectionPayload(sql: sql, section: section, limit: limit, offset: offset)
+}
+
+private func importAllDataPayload(
+    req: Request,
+    actor: User,
+    sql: SQLDatabase,
+    payload: AdminDataExportDTO,
+    recordAudit: Bool = true
+) async throws -> AdminDataImportResultDTO {
     var usersInserted = 0
     var usersSkipped = 0
     var questsInserted = 0
@@ -481,6 +897,22 @@ func importAllData(_ req: Request) async throws -> AdminDataImportResultDTO {
     var requirementsSkipped = 0
     var contributionsInserted = 0
     var contributionsSkipped = 0
+    var blueprintsInserted = 0
+    var blueprintsSkipped = 0
+    var blueprintCraftersInserted = 0
+    var blueprintCraftersSkipped = 0
+    var storageLocationsInserted = 0
+    var storageLocationsSkipped = 0
+    var storageEntriesInserted = 0
+    var storageEntriesSkipped = 0
+    var invitesInserted = 0
+    var invitesSkipped = 0
+    var usernameChangeRequestsInserted = 0
+    var usernameChangeRequestsSkipped = 0
+    var questTemplatesInserted = 0
+    var questTemplatesSkipped = 0
+    var questTemplateRequirementsInserted = 0
+    var questTemplateRequirementsSkipped = 0
     var passwordResetRequestsInserted = 0
     var passwordResetRequestsSkipped = 0
     var passwordResetTokensInserted = 0
@@ -571,6 +1003,175 @@ func importAllData(_ req: Request) async throws -> AdminDataImportResultDTO {
         contributionsInserted += 1
     }
 
+    for item in payload.blueprints {
+        if try await sqlRecordExists(sql: sql, table: "blueprints", id: item.id) {
+            blueprintsSkipped += 1
+            continue
+        }
+        if let parentId = item.parentId, !(try await sqlRecordExists(sql: sql, table: "blueprints", id: parentId)) {
+            blueprintsSkipped += 1
+            continue
+        }
+        guard BlueprintCategory(rawValue: item.category) != nil else {
+            blueprintsSkipped += 1
+            continue
+        }
+        try await sql.raw("""
+            INSERT INTO blueprints (id, parent_id, name, description, item_code, badges_csv, category, is_craftable, created_at, updated_at)
+            VALUES (
+                \(bind: item.id), \(bind: item.parentId), \(bind: item.name), \(bind: item.description), \(bind: item.itemCode),
+                \(bind: item.badgesCSV), \(bind: item.category)::blueprint_category, \(bind: item.isCraftable), \(bind: item.createdAt), \(bind: item.updatedAt)
+            """).run()
+        blueprintsInserted += 1
+    }
+
+    for item in payload.blueprintCrafters {
+        if try await sqlRecordExists(sql: sql, table: "blueprint_crafters", id: item.id) {
+            blueprintCraftersSkipped += 1
+            continue
+        }
+        let blueprintExists = try await sqlRecordExists(sql: sql, table: "blueprints", id: item.blueprintId)
+        let userExists = try await sqlRecordExists(sql: sql, table: "users", id: item.userId)
+        if !blueprintExists || !userExists {
+            blueprintCraftersSkipped += 1
+            continue
+        }
+        let duplicateRows = try await sql.raw("""
+            SELECT 1 FROM blueprint_crafters
+            WHERE blueprint_id = \(bind: item.blueprintId) AND user_id = \(bind: item.userId)
+            LIMIT 1
+            """).all()
+        if !duplicateRows.isEmpty {
+            blueprintCraftersSkipped += 1
+            continue
+        }
+        try await sql.raw("""
+            INSERT INTO blueprint_crafters (id, blueprint_id, user_id, created_at)
+            VALUES (\(bind: item.id), \(bind: item.blueprintId), \(bind: item.userId), \(bind: item.createdAt))
+            """).run()
+        blueprintCraftersInserted += 1
+    }
+
+    for item in payload.storageLocations {
+        if try await sqlRecordExists(sql: sql, table: "storage_locations", id: item.id) {
+            storageLocationsSkipped += 1
+            continue
+        }
+        if let parentId = item.parentId, !(try await sqlRecordExists(sql: sql, table: "storage_locations", id: parentId)) {
+            storageLocationsSkipped += 1
+            continue
+        }
+        try await sql.raw("""
+            INSERT INTO storage_locations (id, parent_id, name, description, created_at, updated_at)
+            VALUES (\(bind: item.id), \(bind: item.parentId), \(bind: item.name), \(bind: item.description), \(bind: item.createdAt), \(bind: item.updatedAt))
+            """).run()
+        storageLocationsInserted += 1
+    }
+
+    for item in payload.storageEntries {
+        if try await sqlRecordExists(sql: sql, table: "storage_entries", id: item.id) {
+            storageEntriesSkipped += 1
+            continue
+        }
+        let blueprintExists = try await sqlRecordExists(sql: sql, table: "blueprints", id: item.itemId)
+        let locationExists = try await sqlRecordExists(sql: sql, table: "storage_locations", id: item.locationId)
+        let userExists = try await sqlRecordExists(sql: sql, table: "users", id: item.userId)
+        if !blueprintExists || !locationExists || !userExists {
+            storageEntriesSkipped += 1
+            continue
+        }
+        try await sql.raw("""
+            INSERT INTO storage_entries (id, item_id, location_id, user_id, qty, note, created_at)
+            VALUES (\(bind: item.id), \(bind: item.itemId), \(bind: item.locationId), \(bind: item.userId), \(bind: item.qty), \(bind: item.note), \(bind: item.createdAt))
+            """).run()
+        storageEntriesInserted += 1
+    }
+
+    for item in payload.invites {
+        let existsById = try await sqlRecordExists(sql: sql, table: "invites", id: item.id)
+        let existsByHash = try await sqlTokenHashExists(sql: sql, table: "invites", tokenHash: item.tokenHash)
+        if existsById || existsByHash {
+            invitesSkipped += 1
+            continue
+        }
+        let createdByExists = try await sqlRecordExists(sql: sql, table: "users", id: item.createdByUserId)
+        if !createdByExists {
+            invitesSkipped += 1
+            continue
+        }
+        if let usedByUserId = item.usedByUserId, !(try await sqlRecordExists(sql: sql, table: "users", id: usedByUserId)) {
+            invitesSkipped += 1
+            continue
+        }
+        try await sql.raw("""
+            INSERT INTO invites (id, token_hash, raw_token, role, max_uses, use_count, created_by_user_id, used_by_user_id, expires_at, used_at, revoked_at, created_at)
+            VALUES (
+                \(bind: item.id), \(bind: item.tokenHash), \(bind: item.rawToken), \(bind: item.role), \(bind: item.maxUses), \(bind: item.useCount),
+                \(bind: item.createdByUserId), \(bind: item.usedByUserId), \(bind: item.expiresAt), \(bind: item.usedAt), \(bind: item.revokedAt), \(bind: item.createdAt))
+            """).run()
+        invitesInserted += 1
+    }
+
+    for item in payload.usernameChangeRequests {
+        if try await sqlRecordExists(sql: sql, table: "username_change_requests", id: item.id) {
+            usernameChangeRequestsSkipped += 1
+            continue
+        }
+        let userExists = try await sqlRecordExists(sql: sql, table: "users", id: item.userId)
+        if !userExists {
+            usernameChangeRequestsSkipped += 1
+            continue
+        }
+        if let reviewedBy = item.reviewedBy, !(try await sqlRecordExists(sql: sql, table: "users", id: reviewedBy)) {
+            usernameChangeRequestsSkipped += 1
+            continue
+        }
+        guard UsernameChangeRequestStatus(rawValue: item.status) != nil else {
+            usernameChangeRequestsSkipped += 1
+            continue
+        }
+        try await sql.raw("""
+            INSERT INTO username_change_requests (id, user_id, current_username, desired_username, status, reviewed_by, reviewed_at, created_at)
+            VALUES (
+                \(bind: item.id), \(bind: item.userId), \(bind: item.currentUsername), \(bind: item.desiredUsername),
+                \(bind: item.status)::username_change_request_status, \(bind: item.reviewedBy), \(bind: item.reviewedAt), \(bind: item.createdAt))
+            """).run()
+        usernameChangeRequestsInserted += 1
+    }
+
+    for item in payload.questTemplates {
+        if try await sqlRecordExists(sql: sql, table: "quest_templates", id: item.id) {
+            questTemplatesSkipped += 1
+            continue
+        }
+        if let sourceQuestId = item.sourceQuestId, !(try await sqlRecordExists(sql: sql, table: "quests", id: sourceQuestId)) {
+            questTemplatesSkipped += 1
+            continue
+        }
+        try await sql.raw("""
+            INSERT INTO quest_templates (id, title, description, handover_info, source_quest_id, created_at)
+            VALUES (\(bind: item.id), \(bind: item.title), \(bind: item.description), \(bind: item.handoverInfo), \(bind: item.sourceQuestId), \(bind: item.createdAt))
+            """).run()
+        questTemplatesInserted += 1
+    }
+
+    for item in payload.questTemplateRequirements {
+        if try await sqlRecordExists(sql: sql, table: "quest_template_requirements", id: item.id) {
+            questTemplateRequirementsSkipped += 1
+            continue
+        }
+        let templateExists = try await sqlRecordExists(sql: sql, table: "quest_templates", id: item.templateId)
+        if !templateExists {
+            questTemplateRequirementsSkipped += 1
+            continue
+        }
+        try await sql.raw("""
+            INSERT INTO quest_template_requirements (id, template_id, item_name, qty_needed, unit)
+            VALUES (\(bind: item.id), \(bind: item.templateId), \(bind: item.itemName), \(bind: item.qtyNeeded), \(bind: item.unit))
+            """).run()
+        questTemplateRequirementsInserted += 1
+    }
+
     for item in payload.passwordResetRequests {
         if try await sqlRecordExists(sql: sql, table: "password_reset_requests", id: item.id) {
             passwordResetRequestsSkipped += 1
@@ -656,13 +1257,15 @@ func importAllData(_ req: Request) async throws -> AdminDataImportResultDTO {
         auditEventsInserted += 1
     }
 
-    await recordAuditEvent(
-        on: req,
-        actor: actor,
-        action: "admin.data.import",
-        entityType: "system",
-        details: "version=\(payload.version)"
-    )
+    if recordAudit {
+        await recordAuditEvent(
+            on: req,
+            actor: actor,
+            action: "admin.data.import",
+            entityType: "system",
+            details: "version=\(payload.version)"
+        )
+    }
 
     return .init(
         usersInserted: usersInserted,
@@ -673,6 +1276,22 @@ func importAllData(_ req: Request) async throws -> AdminDataImportResultDTO {
         requirementsSkipped: requirementsSkipped,
         contributionsInserted: contributionsInserted,
         contributionsSkipped: contributionsSkipped,
+        blueprintsInserted: blueprintsInserted,
+        blueprintsSkipped: blueprintsSkipped,
+        blueprintCraftersInserted: blueprintCraftersInserted,
+        blueprintCraftersSkipped: blueprintCraftersSkipped,
+        storageLocationsInserted: storageLocationsInserted,
+        storageLocationsSkipped: storageLocationsSkipped,
+        storageEntriesInserted: storageEntriesInserted,
+        storageEntriesSkipped: storageEntriesSkipped,
+        invitesInserted: invitesInserted,
+        invitesSkipped: invitesSkipped,
+        usernameChangeRequestsInserted: usernameChangeRequestsInserted,
+        usernameChangeRequestsSkipped: usernameChangeRequestsSkipped,
+        questTemplatesInserted: questTemplatesInserted,
+        questTemplatesSkipped: questTemplatesSkipped,
+        questTemplateRequirementsInserted: questTemplateRequirementsInserted,
+        questTemplateRequirementsSkipped: questTemplateRequirementsSkipped,
         passwordResetRequestsInserted: passwordResetRequestsInserted,
         passwordResetRequestsSkipped: passwordResetRequestsSkipped,
         passwordResetTokensInserted: passwordResetTokensInserted,
@@ -683,3 +1302,318 @@ func importAllData(_ req: Request) async throws -> AdminDataImportResultDTO {
         auditEventsSkipped: auditEventsSkipped
     )
 }
+
+func importAllData(_ req: Request) async throws -> AdminDataImportResultDTO {
+    let actor = try requireSuperAdmin(req)
+    let payload = try req.content.decode(AdminDataExportDTO.self)
+    guard let sql = req.db as? SQLDatabase else {
+        throw Abort(.internalServerError, reason: "SQL database unavailable")
+    }
+
+    return try await importAllDataPayload(req: req, actor: actor, sql: sql, payload: payload)
+}
+
+private func normalizeRemoteBaseURL(_ raw: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw Abort(.badRequest, reason: "Source URL is required")
+    }
+
+    guard let components = URLComponents(string: trimmed), let scheme = components.scheme?.lowercased() else {
+        throw Abort(.badRequest, reason: "Source URL is invalid")
+    }
+
+    guard scheme == "http" || scheme == "https" else {
+        throw Abort(.badRequest, reason: "Source URL must use http or https")
+    }
+
+    guard components.host != nil else {
+        throw Abort(.badRequest, reason: "Source URL must include a host")
+    }
+
+    return trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+}
+
+private func decodeRemoteJSON<T: Decodable>(
+    _ type: T.Type,
+    from response: ClientResponse,
+    req: Request,
+    context: String
+) async throws -> T {
+    guard response.status == .ok else {
+        let bodyText = response.body.flatMap { $0.getString(at: 0, length: $0.readableBytes) } ?? ""
+        throw Abort(.badGateway, reason: "\(context) failed with HTTP \(response.status.code). \(bodyText)")
+    }
+
+    let bodyData = response.body.map { Data(buffer: $0) } ?? Data()
+    do {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(T.self, from: bodyData)
+    } catch {
+        req.logger.error("Remote transfer decode failure for \(context): \(error)")
+        throw Abort(.badGateway, reason: "\(context) returned invalid JSON")
+    }
+}
+
+private func sumImportResults(_ current: AdminDataImportResultDTO, _ next: AdminDataImportResultDTO) -> AdminDataImportResultDTO {
+    .init(
+        usersInserted: current.usersInserted + next.usersInserted,
+        usersSkipped: current.usersSkipped + next.usersSkipped,
+        questsInserted: current.questsInserted + next.questsInserted,
+        questsSkipped: current.questsSkipped + next.questsSkipped,
+        requirementsInserted: current.requirementsInserted + next.requirementsInserted,
+        requirementsSkipped: current.requirementsSkipped + next.requirementsSkipped,
+        contributionsInserted: current.contributionsInserted + next.contributionsInserted,
+        contributionsSkipped: current.contributionsSkipped + next.contributionsSkipped,
+        blueprintsInserted: current.blueprintsInserted + next.blueprintsInserted,
+        blueprintsSkipped: current.blueprintsSkipped + next.blueprintsSkipped,
+        blueprintCraftersInserted: current.blueprintCraftersInserted + next.blueprintCraftersInserted,
+        blueprintCraftersSkipped: current.blueprintCraftersSkipped + next.blueprintCraftersSkipped,
+        storageLocationsInserted: current.storageLocationsInserted + next.storageLocationsInserted,
+        storageLocationsSkipped: current.storageLocationsSkipped + next.storageLocationsSkipped,
+        storageEntriesInserted: current.storageEntriesInserted + next.storageEntriesInserted,
+        storageEntriesSkipped: current.storageEntriesSkipped + next.storageEntriesSkipped,
+        invitesInserted: current.invitesInserted + next.invitesInserted,
+        invitesSkipped: current.invitesSkipped + next.invitesSkipped,
+        usernameChangeRequestsInserted: current.usernameChangeRequestsInserted + next.usernameChangeRequestsInserted,
+        usernameChangeRequestsSkipped: current.usernameChangeRequestsSkipped + next.usernameChangeRequestsSkipped,
+        questTemplatesInserted: current.questTemplatesInserted + next.questTemplatesInserted,
+        questTemplatesSkipped: current.questTemplatesSkipped + next.questTemplatesSkipped,
+        questTemplateRequirementsInserted: current.questTemplateRequirementsInserted + next.questTemplateRequirementsInserted,
+        questTemplateRequirementsSkipped: current.questTemplateRequirementsSkipped + next.questTemplateRequirementsSkipped,
+        passwordResetRequestsInserted: current.passwordResetRequestsInserted + next.passwordResetRequestsInserted,
+        passwordResetRequestsSkipped: current.passwordResetRequestsSkipped + next.passwordResetRequestsSkipped,
+        passwordResetTokensInserted: current.passwordResetTokensInserted + next.passwordResetTokensInserted,
+        passwordResetTokensSkipped: current.passwordResetTokensSkipped + next.passwordResetTokensSkipped,
+        apiTokensInserted: current.apiTokensInserted + next.apiTokensInserted,
+        apiTokensSkipped: current.apiTokensSkipped + next.apiTokensSkipped,
+        auditEventsInserted: current.auditEventsInserted + next.auditEventsInserted,
+        auditEventsSkipped: current.auditEventsSkipped + next.auditEventsSkipped
+    )
+}
+
+private func emptyImportResult() -> AdminDataImportResultDTO {
+    .init(
+        usersInserted: 0,
+        usersSkipped: 0,
+        questsInserted: 0,
+        questsSkipped: 0,
+        requirementsInserted: 0,
+        requirementsSkipped: 0,
+        contributionsInserted: 0,
+        contributionsSkipped: 0,
+        blueprintsInserted: 0,
+        blueprintsSkipped: 0,
+        blueprintCraftersInserted: 0,
+        blueprintCraftersSkipped: 0,
+        storageLocationsInserted: 0,
+        storageLocationsSkipped: 0,
+        storageEntriesInserted: 0,
+        storageEntriesSkipped: 0,
+        invitesInserted: 0,
+        invitesSkipped: 0,
+        usernameChangeRequestsInserted: 0,
+        usernameChangeRequestsSkipped: 0,
+        questTemplatesInserted: 0,
+        questTemplatesSkipped: 0,
+        questTemplateRequirementsInserted: 0,
+        questTemplateRequirementsSkipped: 0,
+        passwordResetRequestsInserted: 0,
+        passwordResetRequestsSkipped: 0,
+        passwordResetTokensInserted: 0,
+        passwordResetTokensSkipped: 0,
+        apiTokensInserted: 0,
+        apiTokensSkipped: 0,
+        auditEventsInserted: 0,
+        auditEventsSkipped: 0
+    )
+}
+
+private let remoteTransferSections: [(section: String, manifestCount: KeyPath<AdminDataExportManifestCountsDTO, Int>)] = [
+    ("users", \.users),
+    ("quests", \.quests),
+    ("requirements", \.requirements),
+    ("contributions", \.contributions),
+    ("blueprints", \.blueprints),
+    ("blueprintCrafters", \.blueprintCrafters),
+    ("storageLocations", \.storageLocations),
+    ("storageEntries", \.storageEntries),
+    ("invites", \.invites),
+    ("usernameChangeRequests", \.usernameChangeRequests),
+    ("questTemplates", \.questTemplates),
+    ("questTemplateRequirements", \.questTemplateRequirements),
+    ("passwordResetRequests", \.passwordResetRequests),
+    ("passwordResetTokens", \.passwordResetTokens),
+    ("apiTokens", \.apiTokens),
+    ("auditEvents", \.auditEvents)
+]
+
+private func resolveRequestedRemoteSections(_ requested: [String]?) throws -> [String] {
+    let allowed = Set(remoteTransferSections.map(\.section))
+    let normalized = (requested ?? remoteTransferSections.map(\.section)).map {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+    }.filter { !$0.isEmpty }
+
+    guard !normalized.isEmpty else {
+        throw Abort(.badRequest, reason: "At least one transfer section must be selected")
+    }
+
+    for section in normalized where !allowed.contains(section) {
+        throw Abort(.badRequest, reason: "Unknown transfer section: \(section)")
+    }
+
+    var seen = Set<String>()
+    return normalized.filter { seen.insert($0).inserted }
+}
+
+func transferRemoteData(_ req: Request) async throws -> AdminRemoteTransferResultDTO {
+    let actor = try requireSuperAdmin(req)
+    let payload = try req.content.decode(AdminRemoteTransferRequestDTO.self)
+    guard let sql = req.db as? SQLDatabase else {
+        throw Abort(.internalServerError, reason: "SQL database unavailable")
+    }
+
+    let sourceBaseURL = try normalizeRemoteBaseURL(payload.sourceBaseURL)
+    let sourceToken = payload.sourceToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    let selectedSections = try resolveRequestedRemoteSections(payload.sections)
+    guard !sourceToken.isEmpty else {
+        throw Abort(.badRequest, reason: "Source token is required")
+    }
+
+    var headers = HTTPHeaders()
+    headers.add(name: .authorization, value: "Bearer \(sourceToken)")
+
+    let manifestResponse = try await req.client.get(URI(string: "\(sourceBaseURL)/admin/data/export/manifest"), headers: headers)
+    let manifest = try await decodeRemoteJSON(AdminDataExportManifestDTO.self, from: manifestResponse, req: req, context: "Remote manifest")
+
+    let sections = remoteTransferSections
+        .filter { selectedSections.contains($0.section) }
+        .map { (section: $0.section, count: manifest.counts[keyPath: $0.manifestCount]) }
+
+    let chunkSize = 500
+    var chunksFetched = 0
+    var aggregate = emptyImportResult()
+
+    for entry in sections where entry.count > 0 {
+        let chunkCount = Int(ceil(Double(entry.count) / Double(chunkSize)))
+        for chunkIndex in 0..<chunkCount {
+            let offset = chunkIndex * chunkSize
+            let url = "\(sourceBaseURL)/admin/data/export/\(entry.section)?limit=\(chunkSize)&offset=\(offset)"
+            let chunkResponse = try await req.client.get(URI(string: url), headers: headers)
+            let chunkPayload = try await decodeRemoteJSON(AdminDataExportDTO.self, from: chunkResponse, req: req, context: "Remote \(entry.section) chunk \(chunkIndex + 1)")
+            let chunkResult = try await importAllDataPayload(req: req, actor: actor, sql: sql, payload: chunkPayload, recordAudit: false)
+            aggregate = sumImportResults(aggregate, chunkResult)
+            chunksFetched += 1
+        }
+    }
+
+    await recordAuditEvent(
+        on: req,
+        actor: actor,
+        action: "admin.data.transfer_remote",
+        entityType: "system",
+        details: "source=\(sourceBaseURL),chunks=\(chunksFetched),sections=\(selectedSections.joined(separator: ","))"
+    )
+
+    return .init(
+        manifest: manifest,
+        chunksFetched: chunksFetched,
+        sections: selectedSections,
+        importResult: aggregate
+    )
+}
+
+func pushRemoteData(_ req: Request) async throws -> AdminRemotePushResultDTO {
+    let actor = try requireSuperAdmin(req)
+    let payload = try req.content.decode(AdminRemotePushRequestDTO.self)
+    guard let sql = req.db as? SQLDatabase else {
+        throw Abort(.internalServerError, reason: "SQL database unavailable")
+    }
+
+    let targetBaseURL = try normalizeRemoteBaseURL(payload.targetBaseURL)
+    let targetToken = payload.targetToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    let selectedSections = try resolveRequestedRemoteSections(payload.sections)
+    guard !targetToken.isEmpty else {
+        throw Abort(.badRequest, reason: "Target token is required")
+    }
+
+    let manifestCounts = try await AdminDataExportManifestCountsDTO(
+        users: try await countAllRows(sql: sql, table: "users"),
+        quests: try await countAllRows(sql: sql, table: "quests"),
+        requirements: try await countAllRows(sql: sql, table: "requirements"),
+        contributions: try await countAllRows(sql: sql, table: "contributions"),
+        blueprints: try await countAllRows(sql: sql, table: "blueprints"),
+        blueprintCrafters: try await countAllRows(sql: sql, table: "blueprint_crafters"),
+        storageLocations: try await countAllRows(sql: sql, table: "storage_locations"),
+        storageEntries: try await countAllRows(sql: sql, table: "storage_entries"),
+        invites: try await countAllRows(sql: sql, table: "invites"),
+        usernameChangeRequests: try await countAllRows(sql: sql, table: "username_change_requests"),
+        questTemplates: try await countAllRows(sql: sql, table: "quest_templates"),
+        questTemplateRequirements: try await countAllRows(sql: sql, table: "quest_template_requirements"),
+        passwordResetRequests: try await countAllRows(sql: sql, table: "password_reset_requests"),
+        passwordResetTokens: try await countAllRows(sql: sql, table: "password_reset_tokens"),
+        apiTokens: try await countAllRows(sql: sql, table: "api_tokens"),
+        auditEvents: try await countAllRows(sql: sql, table: "audit_events")
+    )
+    let manifest = AdminDataExportManifestDTO(
+        version: 1,
+        generatedAt: Date(),
+        counts: manifestCounts
+    )
+
+    var headers = HTTPHeaders()
+    headers.add(name: .authorization, value: "Bearer \(targetToken)")
+    headers.add(name: .contentType, value: "application/json")
+
+    let chunkSize = 500
+    var chunksSent = 0
+    var aggregate = emptyImportResult()
+
+    for entry in remoteTransferSections where selectedSections.contains(entry.section) {
+        let totalCount = manifest.counts[keyPath: entry.manifestCount]
+        guard totalCount > 0 else { continue }
+
+        let chunkCount = Int(ceil(Double(totalCount) / Double(chunkSize)))
+        for chunkIndex in 0..<chunkCount {
+            let offset = chunkIndex * chunkSize
+            let chunkPayload = try await exportDataSectionPayload(
+                sql: sql,
+                section: entry.section,
+                limit: chunkSize,
+                offset: offset,
+                generatedAt: manifest.generatedAt
+            )
+            let response = try await req.client.post(
+                URI(string: "\(targetBaseURL)/admin/data/import"),
+                headers: headers
+            ) { clientRequest in
+                clientRequest.body = try encodeTransferPayload(chunkPayload)
+            }
+            let chunkResult = try await decodeRemoteJSON(
+                AdminDataImportResultDTO.self,
+                from: response,
+                req: req,
+                context: "Remote target import for \(entry.section) chunk \(chunkIndex + 1)"
+            )
+            aggregate = sumImportResults(aggregate, chunkResult)
+            chunksSent += 1
+        }
+    }
+
+    await recordAuditEvent(
+        on: req,
+        actor: actor,
+        action: "admin.data.push_remote",
+        entityType: "system",
+        details: "target=\(targetBaseURL),chunks=\(chunksSent),sections=\(selectedSections.joined(separator: ","))"
+    )
+
+    return .init(
+        manifest: manifest,
+        chunksSent: chunksSent,
+        sections: selectedSections,
+        importResult: aggregate
+    )
+}
+

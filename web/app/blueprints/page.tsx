@@ -36,6 +36,8 @@ type BlueprintBranchProps = {
   editMode: boolean;
   draggedNodeId: string | null;
   moveBusyId: string | null;
+  collapsedIds: string[];
+  onToggleCollapse: (nodeId: string) => void;
   onDragStart: (node: BlueprintTreeNode) => void;
   onDragEnd: () => void;
   onDropOnNode: (targetNode: BlueprintTreeNode) => void;
@@ -77,12 +79,16 @@ function BlueprintBranch({
   editMode,
   draggedNodeId,
   moveBusyId,
+  collapsedIds,
+  onToggleCollapse,
   onDragStart,
   onDragEnd,
   onDropOnNode
 }: BlueprintBranchProps) {
   const isDragged = draggedNodeId === node.id;
   const canDropHere = editMode && draggedNodeId !== null && draggedNodeId !== node.id && moveBusyId === null;
+  const hasChildren = node.children.length > 0;
+  const isCollapsed = collapsedIds.includes(node.id);
 
   return (
     <div style={{ marginLeft: depth * 18, marginTop: depth === 0 ? 0 : 10 }}>
@@ -108,7 +114,19 @@ function BlueprintBranch({
         }}
       >
         <div>
-          <a href={`/blueprints/${node.id}`}><strong>{node.name}</strong></a>
+          <div className="qb-inline" style={{ gap: 10 }}>
+            {hasChildren ? (
+              <button
+                type="button"
+                className="qb-nav-link"
+                onClick={() => onToggleCollapse(node.id)}
+                style={{ padding: "4px 8px", minWidth: 36 }}
+              >
+                {isCollapsed ? "+" : "-"}
+              </button>
+            ) : null}
+            <a href={`/blueprints/${node.id}`}><strong>{node.name}</strong></a>
+          </div>
         </div>
         <div className="qb-inline">
           {node.badges.map((badge) => <Badge key={badge} label={badge} />)}
@@ -117,7 +135,7 @@ function BlueprintBranch({
       </div>
       {node.description ? <div className="qb-muted">{node.description}</div> : null}
       {editMode ? <div className="qb-muted">Hier ablegen, um es unter {node.name} einzuordnen.</div> : null}
-      {node.children.map((child) => (
+      {!isCollapsed ? node.children.map((child) => (
         <BlueprintBranch
           key={child.id}
           node={child}
@@ -125,11 +143,13 @@ function BlueprintBranch({
           editMode={editMode}
           draggedNodeId={draggedNodeId}
           moveBusyId={moveBusyId}
+          collapsedIds={collapsedIds}
+          onToggleCollapse={onToggleCollapse}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
           onDropOnNode={onDropOnNode}
         />
-      ))}
+      )) : null}
     </div>
   );
 }
@@ -143,6 +163,7 @@ export default function BlueprintsPage() {
   const [draggedNode, setDraggedNode] = useState<BlueprintTreeNode | null>(null);
   const [moveBusyId, setMoveBusyId] = useState<string | null>(null);
   const [activeBadgeFilters, setActiveBadgeFilters] = useState<string[]>([]);
+  const [collapsedIds, setCollapsedIds] = useState<string[]>([]);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -176,6 +197,10 @@ export default function BlueprintsPage() {
     }
 
     setData((await bpRes.json()) as BlueprintListResponse);
+  }
+
+  function toggleCollapse(nodeId: string) {
+    setCollapsedIds((current) => toggleValue(current, nodeId));
   }
 
   useEffect(() => {
@@ -387,6 +412,8 @@ export default function BlueprintsPage() {
               editMode={editMode}
               draggedNodeId={draggedNode?.id ?? null}
               moveBusyId={moveBusyId}
+              collapsedIds={collapsedIds}
+              onToggleCollapse={toggleCollapse}
               onDragStart={setDraggedNode}
               onDragEnd={() => setDraggedNode(null)}
               onDropOnNode={(targetNode) => {

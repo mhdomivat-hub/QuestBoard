@@ -20,6 +20,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddQuestRetentionFields())
     app.migrations.add(AddQuestApprovalFields())
     app.migrations.add(AddQuestHandoverInfoField())
+    app.migrations.add(AddQuestPriorityField())
     app.migrations.add(MigrateQuestStatusToString())
     app.migrations.add(CreateRequirement())
     app.migrations.add(CreateContribution())
@@ -36,6 +37,9 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddBlueprintBadgesField())
     app.migrations.add(AddBlueprintItemCodeField())
     app.migrations.add(CreateBlueprintCrafter())
+    app.migrations.add(CreateStorageLocation())
+    app.migrations.add(CreateStorageEntry())
+    app.migrations.add(MigrateStorageItemsToBlueprintItems())
     app.migrations.add(CreateQuestTemplate())
     app.migrations.add(CreateQuestTemplateRequirement())
 

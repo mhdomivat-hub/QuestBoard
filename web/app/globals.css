@@ -69,6 +69,11 @@ a:hover {
   box-shadow: var(--shadow-soft);
 }
 
+.qb-card-priority {
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 0 1px rgba(201, 162, 77, 0.38), var(--shadow-soft);
+}
+
 .qb-card-title {
   margin: 0 0 8px 0;
 }

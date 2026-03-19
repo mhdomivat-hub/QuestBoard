@@ -125,6 +125,38 @@ private func buildCrafterMap(
     return result
 }
 
+private func buildBlueprintActivityMap(
+    blueprints: [Blueprint],
+    assignments: [BlueprintCrafter],
+    storageEntries: [StorageEntry]
+) -> [UUID: Date] {
+    var result: [UUID: Date] = [:]
+
+    func register(_ date: Date?, for blueprintId: UUID) {
+        guard let date else { return }
+        if let existing = result[blueprintId], existing >= date {
+            return
+        }
+        result[blueprintId] = date
+    }
+
+    for blueprint in blueprints {
+        guard let blueprintId = blueprint.id else { continue }
+        register(blueprint.createdAt, for: blueprintId)
+        register(blueprint.updatedAt, for: blueprintId)
+    }
+
+    for assignment in assignments {
+        register(assignment.createdAt, for: assignment.$blueprint.id)
+    }
+
+    for entry in storageEntries {
+        register(entry.createdAt, for: entry.$item.id)
+    }
+
+    return result
+}
+
 private func collectAvailableBadges(_ blueprints: [Blueprint]) -> [String] {
     var seen: Set<String> = []
     var result: [String] = []
@@ -182,7 +214,8 @@ private func updateBlueprintSubtreeCategory(rootId: UUID, category: BlueprintCat
 private func buildBlueprintTree(
     parentId: UUID?,
     grouped: [UUID?: [Blueprint]],
-    crafterMap: [UUID: [BlueprintCrafterResponseDTO]]
+    crafterMap: [UUID: [BlueprintCrafterResponseDTO]],
+    latestActivityMap: [UUID: Date]
 ) throws -> [BlueprintTreeNodeDTO] {
     let nodes = (grouped[parentId] ?? []).sorted {
         $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -196,11 +229,18 @@ private func buildBlueprintTree(
             name: node.name,
             description: node.description,
             itemCode: node.itemCode,
+            createdAt: node.createdAt,
+            latestActivityAt: latestActivityMap[nodeID],
             badges: decodeBlueprintBadges(node.badgesCSV),
             category: node.category,
             isCraftable: node.isCraftable,
             crafters: crafterMap[nodeID] ?? [],
-            children: try buildBlueprintTree(parentId: nodeID, grouped: grouped, crafterMap: crafterMap)
+            children: try buildBlueprintTree(
+                parentId: nodeID,
+                grouped: grouped,
+                crafterMap: crafterMap,
+                latestActivityMap: latestActivityMap
+            )
         )
     }
 }
@@ -263,7 +303,13 @@ func listBlueprints(_ req: Request) async throws -> BlueprintListResponseDTO {
     _ = try requireNonGuestUser(req)
 
     let (blueprints, assignments, usersById) = try await loadBlueprintContext(on: req.db)
+    let storageEntries = try await StorageEntry.query(on: req.db).all()
     let crafterMap = buildCrafterMap(assignments, usersById: usersById)
+    let latestActivityMap = buildBlueprintActivityMap(
+        blueprints: blueprints,
+        assignments: assignments,
+        storageEntries: storageEntries
+    )
     let groupedByParent = Dictionary(grouping: blueprints, by: { $0.$parent.id })
     let roots = blueprints.filter { $0.$parent.id == nil && $0.category == .blueprints }
 
@@ -277,11 +323,18 @@ func listBlueprints(_ req: Request) async throws -> BlueprintListResponseDTO {
                 name: root.name,
                 description: root.description,
                 itemCode: root.itemCode,
+                createdAt: root.createdAt,
+                latestActivityAt: latestActivityMap[rootID],
                 badges: decodeBlueprintBadges(root.badgesCSV),
                 category: root.category,
                 isCraftable: root.isCraftable,
                 crafters: crafterMap[rootID] ?? [],
-                children: try buildBlueprintTree(parentId: rootID, grouped: groupedByParent, crafterMap: crafterMap)
+                children: try buildBlueprintTree(
+                    parentId: rootID,
+                    grouped: groupedByParent,
+                    crafterMap: crafterMap,
+                    latestActivityMap: latestActivityMap
+                )
             )
         }
 
@@ -635,6 +688,14 @@ func mergeBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO {
     for assignment in secondaryAssignments where !existingPrimaryUserIds.contains(assignment.$user.id) {
         let mergedAssignment = BlueprintCrafter(blueprintID: primaryId, userID: assignment.$user.id)
         try await mergedAssignment.save(on: req.db)
+    }
+
+    let secondaryStorageEntries = try await StorageEntry.query(on: req.db)
+        .filter(\.$item.$id == secondaryId)
+        .all()
+    for entry in secondaryStorageEntries {
+        entry.$item.id = primaryId
+        try await entry.save(on: req.db)
     }
 
     try await BlueprintCrafter.query(on: req.db)

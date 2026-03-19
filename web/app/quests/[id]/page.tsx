@@ -23,6 +23,7 @@ type Quest = {
   createdByUsername?: string | null;
   isApproved: boolean;
   approvedAt?: string | null;
+  isPrioritized: boolean;
 };
 
 type Requirement = {
@@ -64,6 +65,7 @@ export default function QuestDetailPage() {
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editHandoverInfo, setEditHandoverInfo] = useState("");
+  const [editIsPrioritized, setEditIsPrioritized] = useState(false);
   const [savingQuestDetails, setSavingQuestDetails] = useState(false);
 
   const [newReqItem, setNewReqItem] = useState("");
@@ -86,6 +88,7 @@ export default function QuestDetailPage() {
     setEditTitle(loaded.title ?? "");
     setEditDescription(loaded.description ?? "");
     setEditHandoverInfo(loaded.handoverInfo ?? "");
+    setEditIsPrioritized(loaded.isPrioritized ?? false);
   }
 
   async function loadMe() {
@@ -269,7 +272,8 @@ export default function QuestDetailPage() {
         body: JSON.stringify({
           title: editTitle,
           description: editDescription,
-          handoverInfo: editHandoverInfo || null
+          handoverInfo: editHandoverInfo || null,
+          isPrioritized: canAdmin ? editIsPrioritized : undefined
         })
       });
       if (!res.ok) {
@@ -364,10 +368,11 @@ export default function QuestDetailPage() {
       <h1>Quest-Details</h1>
 
       {quest ? (
-        <Card>
+        <Card className={quest.isPrioritized ? "qb-card-priority" : ""}>
           <div className="qb-inline" style={{ justifyContent: "space-between" }}>
             <strong>{quest.title}</strong>
             <div className="qb-inline">
+              {quest.isPrioritized ? <Badge label="PRIORITAET" /> : null}
               {!quest.isApproved ? <Badge label="PENDING" /> : <Badge label="APPROVED" />}
               <Badge label={quest.status} />
             </div>
@@ -406,6 +411,16 @@ export default function QuestDetailPage() {
                 value={editHandoverInfo}
                 onChange={(e) => setEditHandoverInfo(e.target.value)}
               />
+              {canAdmin ? (
+                <label className="qb-inline" style={{ alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={editIsPrioritized}
+                    onChange={(e) => setEditIsPrioritized(e.target.checked)}
+                  />
+                  <span>Quest priorisieren</span>
+                </label>
+              ) : null}
               <TextArea
                 placeholder="Beschreibung"
                 value={editDescription}

@@ -45,6 +45,11 @@ const cleanupOptions: CleanupTargetOption[] = [
     description: "Loescht nur, wer was craften kann. Die Blueprint-Hierarchie bleibt erhalten."
   },
   {
+    key: "STORAGE_ENTRIES",
+    label: "Storage Eintraege",
+    description: "Loescht nur gelagerte Mengen. Item-Struktur, Badges und Locations bleiben erhalten."
+  },
+  {
     key: "INVITES",
     label: "Invites",
     description: "Loescht alle offenen, verbrauchten und widerrufenen Invites."

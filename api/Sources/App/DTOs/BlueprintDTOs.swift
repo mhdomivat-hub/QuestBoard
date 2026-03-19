@@ -46,6 +46,8 @@ struct BlueprintTreeNodeDTO: Content {
     let name: String
     let description: String?
     let itemCode: String?
+    let createdAt: Date?
+    let latestActivityAt: Date?
     let badges: [String]
     let category: BlueprintCategory
     let isCraftable: Bool
