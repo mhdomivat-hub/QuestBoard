@@ -106,16 +106,26 @@ private func buildItemSearchRequestMap(
 private func buildItemSearchTree(
     parentId: UUID?,
     grouped: [UUID?: [Blueprint]],
-    requestsByItem: [UUID: [ItemSearchRequestResponseDTO]]
+    requestsByItem: [UUID: [ItemSearchRequestResponseDTO]],
+    crafterCountsByItem: [UUID: Int],
+    entryQtyByItem: [UUID: Int]
 ) throws -> [ItemSearchTreeNodeDTO] {
     let nodes = (grouped[parentId] ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
     return try nodes.map { node in
         guard let nodeId = node.id else { throw Abort(.internalServerError) }
-        let children = try buildItemSearchTree(parentId: nodeId, grouped: grouped, requestsByItem: requestsByItem)
+        let children = try buildItemSearchTree(
+            parentId: nodeId,
+            grouped: grouped,
+            requestsByItem: requestsByItem,
+            crafterCountsByItem: crafterCountsByItem,
+            entryQtyByItem: entryQtyByItem
+        )
         let openRequests = requestsByItem[nodeId]?.filter { $0.status == .open } ?? []
         let openRequestCount = openRequests.count + children.reduce(0) { $0 + $1.openRequestCount }
         let offerCount = openRequests.reduce(0) { $0 + $1.offers.count } + children.reduce(0) { $0 + $1.offerCount }
+        let crafterCount = (crafterCountsByItem[nodeId] ?? 0) + children.reduce(0) { $0 + $1.crafterCount }
+        let totalQty = (entryQtyByItem[nodeId] ?? 0) + children.reduce(0) { $0 + $1.totalQty }
 
         return .init(
             id: nodeId,
@@ -126,6 +136,8 @@ private func buildItemSearchTree(
             badges: decodeItemSearchBadges(node.badgesCSV),
             openRequestCount: openRequestCount,
             offerCount: offerCount,
+            crafterCount: crafterCount,
+            totalQty: totalQty,
             children: children
         )
     }
@@ -140,6 +152,8 @@ func listItemSearchItems(_ req: Request) async throws -> ItemSearchListResponseD
     let requests = try await ItemSearchRequest.query(on: req.db).all()
     let offers = try await ItemSearchOffer.query(on: req.db).all()
     let users = try await User.query(on: req.db).all()
+    let crafters = try await BlueprintCrafter.query(on: req.db).all()
+    let entries = try await StorageEntry.query(on: req.db).all()
 
     let usersById = Dictionary(uniqueKeysWithValues: users.compactMap { user in
         user.id.map { ($0, user) }
@@ -147,9 +161,24 @@ func listItemSearchItems(_ req: Request) async throws -> ItemSearchListResponseD
     let offerMap = buildItemSearchOfferMap(offers: offers, usersById: usersById)
     let requestMap = buildItemSearchRequestMap(requests: requests, usersById: usersById, offerMap: offerMap)
     let grouped = Dictionary(grouping: items, by: { $0.$parent.id })
+    var crafterCountsByItem: [UUID: Int] = [:]
+    for crafter in crafters {
+        crafterCountsByItem[crafter.$blueprint.id, default: 0] += 1
+    }
+
+    var entryQtyByItem: [UUID: Int] = [:]
+    for entry in entries {
+        entryQtyByItem[entry.$item.id, default: 0] += entry.qty
+    }
 
     return .init(
-        items: try buildItemSearchTree(parentId: nil, grouped: grouped, requestsByItem: requestMap),
+        items: try buildItemSearchTree(
+            parentId: nil,
+            grouped: grouped,
+            requestsByItem: requestMap,
+            crafterCountsByItem: crafterCountsByItem,
+            entryQtyByItem: entryQtyByItem
+        ),
         availableBadges: collectItemSearchBadges(items)
     )
 }

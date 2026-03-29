@@ -53,6 +53,7 @@ type StorageNode = {
   latestActivityAt?: string | null;
   badges: string[];
   totalQty: number;
+  openSearchCount: number;
   children: StorageNode[];
 };
 
@@ -187,6 +188,20 @@ export default function HomePage() {
       .slice(0, 5);
   }, [storageItems]);
 
+  const wantedItems = useMemo(() => {
+    return flattenStorage(storageItems)
+      .filter((item) => item.openSearchCount > 0 && item.children.length === 0)
+      .sort((a, b) => {
+        if (a.openSearchCount !== b.openSearchCount) {
+          return b.openSearchCount - a.openSearchCount;
+        }
+        const aTime = Date.parse(a.latestActivityAt ?? a.createdAt ?? "") || 0;
+        const bTime = Date.parse(b.latestActivityAt ?? b.createdAt ?? "") || 0;
+        return bTime - aTime;
+      })
+      .slice(0, 6);
+  }, [storageItems]);
+
   return (
     <main className="qb-main">
       <h1>QuestBoard Zentrale</h1>
@@ -244,6 +259,46 @@ export default function HomePage() {
             )}
           </Card>
 
+          <div
+            style={{
+              border: "1px solid rgba(245, 197, 24, 0.55)",
+              boxShadow: "0 0 0 1px rgba(245, 197, 24, 0.15)",
+              borderRadius: 12,
+              overflow: "hidden"
+            }}
+          >
+            <Card>
+              <div className="qb-inline" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                <h3 className="qb-card-title">Gesuchte Items</h3>
+                <Badge label={`${wantedItems.length} sichtbar`} />
+              </div>
+              {wantedItems.length === 0 ? (
+                <p className="qb-muted">Aktuell gibt es keine offenen Item-Suchen.</p>
+              ) : (
+                <div className="qb-grid">
+                  {wantedItems.map((item) => (
+                    <div key={item.id} className="qb-inline" style={{ justifyContent: "space-between", gap: 12 }}>
+                      <div>
+                        <strong><a href={`/items/${item.id}`}>{item.name}</a></strong>
+                        <div className="qb-muted" style={{ fontSize: 12 }}>
+                          {item.latestActivityAt || item.createdAt
+                            ? `Zuletzt aktualisiert ${new Date(
+                                item.latestActivityAt ?? item.createdAt ?? ""
+                              ).toLocaleString("de-DE")}`
+                            : "ohne Aktualisierung"}
+                        </div>
+                      </div>
+                      <div className="qb-inline" style={{ gap: 8 }}>
+                        <Badge label={`${item.openSearchCount} gesucht`} />
+                        {item.totalQty > 0 ? <span className="qb-muted">{item.totalQty} im Lager</span> : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+
           <section className="qb-grid two">
             <Card>
               <h3 className="qb-card-title">Zuletzt aktive Blueprints</h3>
@@ -254,7 +309,7 @@ export default function HomePage() {
                   {latestBlueprints.map((blueprint) => (
                     <div key={blueprint.id} className="qb-inline" style={{ justifyContent: "space-between" }}>
                       <div>
-                        <strong><a href={`/blueprints/${blueprint.id}`}>{blueprint.name}</a></strong>
+                        <strong><a href={`/items/${blueprint.id}`}>{blueprint.name}</a></strong>
                         <div className="qb-muted" style={{ fontSize: 12 }}>
                           {blueprint.latestActivityAt || blueprint.createdAt
                             ? `Letzte Aktivitaet ${new Date(
@@ -281,7 +336,7 @@ export default function HomePage() {
                   {latestStorageItems.map((item) => (
                     <div key={item.id} className="qb-inline" style={{ justifyContent: "space-between" }}>
                       <div>
-                        <strong><a href={`/storage/${item.id}`}>{item.name}</a></strong>
+                        <strong><a href={`/items/${item.id}`}>{item.name}</a></strong>
                         <div className="qb-muted" style={{ fontSize: 12 }}>
                           {item.latestActivityAt || item.createdAt
                             ? `Letzte Aktivitaet ${new Date(

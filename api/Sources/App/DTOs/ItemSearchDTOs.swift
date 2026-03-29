@@ -41,6 +41,8 @@ struct ItemSearchTreeNodeDTO: Content {
     let badges: [String]
     let openRequestCount: Int
     let offerCount: Int
+    let crafterCount: Int
+    let totalQty: Int
     let children: [ItemSearchTreeNodeDTO]
 }
 

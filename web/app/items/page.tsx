@@ -130,13 +130,29 @@ function groupBadgeDefinitions(definitions: BadgeDefinition[]) {
     });
 }
 
-function filterTree(nodes: ItemNode[], search: string, activeBadges: string[], activeLocations: string[]): ItemNode[] {
+function filterTree(
+  nodes: ItemNode[],
+  search: string,
+  activeBadges: string[],
+  activeLocations: string[],
+  resourcesOnly: boolean,
+  wantedAndCraftableOnly: boolean,
+  wantedCraftableWithResourcesOnly: boolean
+): ItemNode[] {
   const needle = search.trim().toLowerCase();
   const badgeSet = new Set(activeBadges.map((item) => item.toLowerCase()));
   const locationSet = new Set(activeLocations);
 
   return nodes.flatMap((node) => {
-    const filteredChildren = filterTree(node.children, search, activeBadges, activeLocations);
+    const filteredChildren = filterTree(
+      node.children,
+      search,
+      activeBadges,
+      activeLocations,
+      resourcesOnly,
+      wantedAndCraftableOnly,
+      wantedCraftableWithResourcesOnly
+    );
     const matchesSearch =
       needle.length === 0 ||
       node.name.toLowerCase().includes(needle) ||
@@ -146,8 +162,20 @@ function filterTree(nodes: ItemNode[], search: string, activeBadges: string[], a
       node.locations.some((location) => location.label.toLowerCase().includes(needle));
     const matchesBadges = badgeSet.size === 0 || node.badges.some((badge) => badgeSet.has(badge.toLowerCase()));
     const matchesLocations = locationSet.size === 0 || node.locations.some((location) => locationSet.has(location.id));
+    const matchesResourceFilter = !resourcesOnly || node.badges.some((badge) => badge.toLowerCase() === "ressource");
+    const matchesWantedCraftableFilter = !wantedAndCraftableOnly || (node.openSearchCount > 0 && node.crafterCount > 0);
+    const matchesWantedCraftableWithResourcesFilter =
+      !wantedCraftableWithResourcesOnly || (node.openSearchCount > 0 && node.crafterCount > 0 && node.totalQty > 0);
 
-    if (filteredChildren.length > 0 || (matchesSearch && matchesBadges && matchesLocations)) {
+    if (
+      filteredChildren.length > 0 ||
+      (matchesSearch &&
+        matchesBadges &&
+        matchesLocations &&
+        matchesResourceFilter &&
+        matchesWantedCraftableFilter &&
+        matchesWantedCraftableWithResourcesFilter)
+    ) {
       return [{ ...node, children: filteredChildren }];
     }
     return [];
@@ -384,6 +412,9 @@ export default function ItemsPage() {
   const [search, setSearch] = useState("");
   const [activeBadges, setActiveBadges] = useState<string[]>([]);
   const [activeLocations, setActiveLocations] = useState<string[]>([]);
+  const [resourcesOnly, setResourcesOnly] = useState(false);
+  const [wantedAndCraftableOnly, setWantedAndCraftableOnly] = useState(false);
+  const [wantedCraftableWithResourcesOnly, setWantedCraftableWithResourcesOnly] = useState(false);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -414,7 +445,7 @@ export default function ItemsPage() {
     setError(null);
     const [meRes, listRes] = await Promise.all([
       fetch("/api/me", { cache: "no-store" }),
-      fetch("/api/storage/items", { cache: "no-store" })
+      fetch("/api/storage/items")
     ]);
 
     if (meRes.ok) {
@@ -695,10 +726,25 @@ export default function ItemsPage() {
   }
 
   const filteredItems = useMemo(
-    () => filterTree(data?.items ?? [], search, activeBadges, activeLocations),
-    [data, search, activeBadges, activeLocations]
+    () =>
+      filterTree(
+        data?.items ?? [],
+        search,
+        activeBadges,
+        activeLocations,
+        resourcesOnly,
+        wantedAndCraftableOnly,
+        wantedCraftableWithResourcesOnly
+      ),
+    [data, search, activeBadges, activeLocations, resourcesOnly, wantedAndCraftableOnly, wantedCraftableWithResourcesOnly]
   );
-  const hasFilters = search.trim().length > 0 || activeBadges.length > 0 || activeLocations.length > 0;
+  const hasFilters =
+    search.trim().length > 0 ||
+    activeBadges.length > 0 ||
+    activeLocations.length > 0 ||
+    resourcesOnly ||
+    wantedAndCraftableOnly ||
+    wantedCraftableWithResourcesOnly;
 
   return (
     <main className="qb-main">
@@ -715,6 +761,9 @@ export default function ItemsPage() {
                 setSearch("");
                 setActiveBadges([]);
                 setActiveLocations([]);
+                setResourcesOnly(false);
+                setWantedAndCraftableOnly(false);
+                setWantedCraftableWithResourcesOnly(false);
               }}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
             >
@@ -723,6 +772,25 @@ export default function ItemsPage() {
           ) : null}
         </div>
         <TextInput placeholder="Suche nach Name, Badge, Location oder Item-Code" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <div className="qb-inline" style={{ marginTop: 10, marginBottom: 10 }}>
+          <Button type="button" variant={resourcesOnly ? "primary" : "secondary"} onClick={() => setResourcesOnly((value) => !value)}>
+            Nur Ressourcen
+          </Button>
+          <Button
+            type="button"
+            variant={wantedAndCraftableOnly ? "primary" : "secondary"}
+            onClick={() => setWantedAndCraftableOnly((value) => !value)}
+          >
+            Gesucht + ich kann craften
+          </Button>
+          <Button
+            type="button"
+            variant={wantedCraftableWithResourcesOnly ? "primary" : "secondary"}
+            onClick={() => setWantedCraftableWithResourcesOnly((value) => !value)}
+          >
+            Gesucht + craftbar + Ressourcen
+          </Button>
+        </div>
         <div className="qb-grid" style={{ gap: 10 }}>
           {groupedBadgeDefinitions.length === 0 ? (
             <p className="qb-muted">Noch keine Badges vorhanden.</p>
