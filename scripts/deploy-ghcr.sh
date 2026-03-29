@@ -24,6 +24,10 @@ fi
 export GHCR_NAMESPACE
 export GHCR_IMAGE_TAG
 
+echo "Deploying QuestBoard from GHCR"
+echo "  Namespace: $GHCR_NAMESPACE"
+echo "  Tag:       $GHCR_IMAGE_TAG"
+
 docker compose -f "$COMPOSE_FILE" pull
 docker compose -f "$COMPOSE_FILE" up -d
 docker compose -f "$COMPOSE_FILE" ps
