@@ -53,6 +53,7 @@ private func buildItemSearchOfferMap(
                 userId: userId,
                 username: user.username,
                 note: offer.note,
+                hasResources: offer.hasResources,
                 createdAt: offer.createdAt
             )
         )
@@ -243,7 +244,8 @@ func createItemSearchOffer(_ req: Request) async throws -> ItemSearchDetailRespo
     let offer = ItemSearchOffer(
         requestID: requestId,
         userID: actorId,
-        note: sanitizeItemSearchText(body.note, maxLength: 1000)
+        note: sanitizeItemSearchText(body.note, maxLength: 1000),
+        hasResources: body.hasResources ?? false
     )
     try await offer.save(on: req.db)
 

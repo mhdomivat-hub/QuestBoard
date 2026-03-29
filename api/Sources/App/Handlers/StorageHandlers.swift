@@ -280,7 +280,8 @@ private func buildItemTree(
     entriesByItem: [UUID: [StorageEntryResponseDTO]],
     latestActivityMap: [UUID: Date],
     crafterCountsByItem: [UUID: Int],
-    openSearchCountsByItem: [UUID: Int]
+    openSearchCountsByItem: [UUID: Int],
+    craftedByActorItemIds: Set<UUID>
 ) throws -> [StorageItemTreeNodeDTO] {
     let nodes = (grouped[parentId] ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     return try nodes.map { node in
@@ -291,13 +292,13 @@ private func buildItemTree(
             entriesByItem: entriesByItem,
             latestActivityMap: latestActivityMap,
             crafterCountsByItem: crafterCountsByItem,
-            openSearchCountsByItem: openSearchCountsByItem
+            openSearchCountsByItem: openSearchCountsByItem,
+            craftedByActorItemIds: craftedByActorItemIds
         )
         let ownEntries = entriesByItem[id] ?? []
         let ownQty = ownEntries.reduce(0) { $0 + $1.qty }
         let childQty = children.reduce(0) { $0 + $1.totalQty }
         let ownCrafterCount = crafterCountsByItem[id] ?? 0
-        let childCrafterCount = children.reduce(0) { $0 + $1.crafterCount }
         let ownOpenSearchCount = openSearchCountsByItem[id] ?? 0
         let childOpenSearchCount = children.reduce(0) { $0 + $1.openSearchCount }
         let people = Dictionary(grouping: ownEntries, by: { $0.userId }).compactMap { _, values in
@@ -317,7 +318,8 @@ private func buildItemTree(
             latestActivityAt: latestActivityMap[id],
             badges: decodeStorageBadges(node.badgesCSV),
             hideFromBlueprints: node.hideFromBlueprints,
-            crafterCount: ownCrafterCount + childCrafterCount,
+            craftedByMe: craftedByActorItemIds.contains(id),
+            crafterCount: ownCrafterCount,
             totalQty: ownQty + childQty,
             openSearchCount: ownOpenSearchCount + childOpenSearchCount,
             entryCount: ownEntries.count,
@@ -364,25 +366,37 @@ private func storageItemDetail(
     } + [StorageBreadcrumbItemDTO(id: itemId, name: item.name)]
 
     let entryDtos = entryDTOs(entries: entries.filter { $0.$item.id == itemId }, usersById: usersById, locationsById: locationsById)
-    var childSummaries: [StorageItemChildSummaryDTO] = []
-    for child in (groupedItems[itemId] ?? []).sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) {
-        guard let childId = child.id else { throw Abort(.internalServerError) }
-        let childEntries = entries.filter { $0.$item.id == childId }
-        let childQty = childEntries.reduce(0) { $0 + $1.qty }
-        childSummaries.append(
-            .init(
+    let entriesByItemId = Dictionary(grouping: entries, by: { $0.$item.id })
+
+    func buildChildSummaries(parentId: UUID) throws -> [StorageItemChildSummaryDTO] {
+        let children = (groupedItems[parentId] ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return try children.map { child in
+            guard let childId = child.id else { throw Abort(.internalServerError) }
+            let nestedChildren = try buildChildSummaries(parentId: childId)
+            let ownEntries = entriesByItemId[childId] ?? []
+            let ownQty = ownEntries.reduce(0) { $0 + $1.qty }
+            let ownEntryCount = ownEntries.count
+
+            return .init(
                 id: childId,
                 name: child.name,
                 itemCode: child.itemCode,
                 badges: decodeStorageBadges(child.badgesCSV),
                 hideFromBlueprints: child.hideFromBlueprints,
                 crafterCount: crafterCountsByItem[childId] ?? 0,
-                totalQty: childQty,
-                openSearchCount: openSearchCountsByItem[childId] ?? 0,
-                entryCount: childEntries.count
+                totalQty: ownQty + nestedChildren.reduce(0) { $0 + $1.totalQty },
+                openSearchCount: (openSearchCountsByItem[childId] ?? 0) + nestedChildren.reduce(0) { $0 + $1.openSearchCount },
+                entryCount: ownEntryCount + nestedChildren.reduce(0) { $0 + $1.entryCount },
+                children: nestedChildren
             )
-        )
+        }
     }
+
+    let childSummaries = try buildChildSummaries(parentId: itemId)
+    let ownCrafterCount = crafterCountsByItem[itemId] ?? 0
+    let ownOpenSearchCount = openSearchCountsByItem[itemId] ?? 0
+    let ownEntryCount = entryDtos.count
+    let ownTotalQty = entryDtos.reduce(0) { $0 + $1.qty }
 
     return .init(
         id: itemId,
@@ -394,6 +408,10 @@ private func storageItemDetail(
         availableBadges: availableBadgeNames(from: badgeDefinitionsDTO),
         badgeDefinitions: badgeDefinitionsDTO,
         hideFromBlueprints: item.hideFromBlueprints,
+        crafterCount: ownCrafterCount,
+        totalQty: ownTotalQty + childSummaries.reduce(0) { $0 + $1.totalQty },
+        openSearchCount: ownOpenSearchCount + childSummaries.reduce(0) { $0 + $1.openSearchCount },
+        entryCount: ownEntryCount + childSummaries.reduce(0) { $0 + $1.entryCount },
         breadcrumb: breadcrumb,
         children: childSummaries,
         entries: entryDtos,
@@ -404,7 +422,7 @@ private func storageItemDetail(
 }
 
 func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
-    _ = try requireNonGuestUser(req)
+    let actor = try requireNonGuestUser(req)
 
     let items = try await Blueprint.query(on: req.db)
         .filter(\.$category == .blueprints)
@@ -437,6 +455,7 @@ func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
     let latestActivityMap = buildStorageActivityMap(items: items, entries: entries)
     let crafterCountsByItem = Dictionary(grouping: crafters, by: { $0.$blueprint.id }).mapValues(\.count)
     let openSearchCountsByItem = Dictionary(grouping: searchRequests.filter { $0.status == .open }, by: { $0.$item.id }).mapValues(\.count)
+    let craftedByActorItemIds = Set(crafters.filter { $0.$user.id == actor.id }.map { $0.$blueprint.id })
 
     let itemTree = try buildItemTree(
         parentId: nil,
@@ -444,7 +463,8 @@ func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
         entriesByItem: entriesByItem,
         latestActivityMap: latestActivityMap,
         crafterCountsByItem: crafterCountsByItem,
-        openSearchCountsByItem: openSearchCountsByItem
+        openSearchCountsByItem: openSearchCountsByItem,
+        craftedByActorItemIds: craftedByActorItemIds
     )
     let filteredUsers = availablePeople(from: users.filter { user in
         guard let userId = user.id else { return false }

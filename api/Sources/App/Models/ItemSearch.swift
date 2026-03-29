@@ -68,6 +68,9 @@ final class ItemSearchOffer: Model, Content, @unchecked Sendable {
     @OptionalField(key: "note")
     var note: String?
 
+    @Field(key: "has_resources")
+    var hasResources: Bool
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -80,12 +83,14 @@ final class ItemSearchOffer: Model, Content, @unchecked Sendable {
         id: UUID? = nil,
         requestID: UUID,
         userID: UUID,
-        note: String? = nil
+        note: String? = nil,
+        hasResources: Bool = false
     ) {
         self.id = id
         self.$request.id = requestID
         self.$user.id = userID
         self.note = note
+        self.hasResources = hasResources
     }
 }
 
@@ -130,5 +135,19 @@ struct CreateItemSearchOffer: AsyncMigration {
 
     func revert(on database: Database) async throws {
         try await database.schema(ItemSearchOffer.schema).delete()
+    }
+}
+
+struct AddItemSearchOfferHasResources: AsyncMigration {
+    func prepare(on database: Database) async throws {
+        try await database.schema(ItemSearchOffer.schema)
+            .field("has_resources", .bool, .required, .sql(.default(false)))
+            .update()
+    }
+
+    func revert(on database: Database) async throws {
+        try await database.schema(ItemSearchOffer.schema)
+            .deleteField("has_resources")
+            .update()
     }
 }

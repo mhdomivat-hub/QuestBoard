@@ -11,6 +11,7 @@ struct ItemSearchRequestStatusUpdateDTO: Content {
 
 struct ItemSearchOfferCreateDTO: Content {
     let note: String?
+    let hasResources: Bool?
 }
 
 struct ItemSearchOfferResponseDTO: Content {
@@ -18,6 +19,7 @@ struct ItemSearchOfferResponseDTO: Content {
     let userId: UUID
     let username: String
     let note: String?
+    let hasResources: Bool
     let createdAt: Date?
 }
 

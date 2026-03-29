@@ -44,6 +44,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(MigrateStorageItemsToBlueprintItems())
     app.migrations.add(CreateItemSearchRequest())
     app.migrations.add(CreateItemSearchOffer())
+    app.migrations.add(AddItemSearchOfferHasResources())
     app.migrations.add(CreateQuestTemplate())
     app.migrations.add(CreateQuestTemplateRequirement())
 

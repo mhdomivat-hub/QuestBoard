@@ -11,7 +11,18 @@ type Person = { userId: string; username: string };
 type LocationFilter = { id: string; label: string };
 type BadgeDefinition = { name: string; groupName?: string | null };
 type Entry = { id: string; userId: string; username: string; locationId: string; locationLabel: string; qty: number; note?: string | null; createdAt?: string | null };
-type StorageChild = { id: string; name: string; itemCode?: string | null; badges: string[]; hideFromBlueprints: boolean; crafterCount: number; totalQty: number; openSearchCount: number; entryCount: number };
+type StorageChild = {
+  id: string;
+  name: string;
+  itemCode?: string | null;
+  badges: string[];
+  hideFromBlueprints: boolean;
+  crafterCount: number;
+  totalQty: number;
+  openSearchCount: number;
+  entryCount: number;
+  children: StorageChild[];
+};
 type Breadcrumb = { id: string; name: string };
 type StorageDetail = {
   id: string;
@@ -23,6 +34,10 @@ type StorageDetail = {
   availableBadges: string[];
   badgeDefinitions: BadgeDefinition[];
   hideFromBlueprints: boolean;
+  crafterCount: number;
+  totalQty: number;
+  openSearchCount: number;
+  entryCount: number;
   breadcrumb: Breadcrumb[];
   children: StorageChild[];
   entries: Entry[];
@@ -31,7 +46,7 @@ type StorageDetail = {
 };
 type Crafter = { userId: string; username: string };
 type BlueprintDetail = { id: string; crafters: Crafter[] };
-type SearchOffer = { id: string; userId: string; username: string; note?: string | null };
+type SearchOffer = { id: string; userId: string; username: string; note?: string | null; hasResources: boolean };
 type SearchRequest = {
   id: string;
   userId: string;
@@ -76,6 +91,80 @@ function parseBadges(input: string) {
 
 function toggleValue(values: string[], value: string) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+function childSummaryParts(child: Pick<StorageChild, "crafterCount" | "totalQty" | "openSearchCount">) {
+  const parts: string[] = [];
+  if (child.crafterCount > 0) parts.push(`Crafter ${child.crafterCount}`);
+  if (child.totalQty > 0) parts.push(`Lager ${child.totalQty}`);
+  if (child.openSearchCount > 0) parts.push(`Suche ${child.openSearchCount}`);
+  return parts;
+}
+
+function ChildBranch({
+  child,
+  depth = 0,
+  collapsedIds,
+  onToggleCollapse
+}: {
+  child: StorageChild;
+  depth?: number;
+  collapsedIds: string[];
+  onToggleCollapse: (id: string) => void;
+}) {
+  const hasChildren = child.children.length > 0;
+  const isCollapsed = collapsedIds.includes(child.id);
+
+  return (
+    <div style={{ marginLeft: depth * 18, marginTop: depth === 0 ? 0 : 10 }}>
+      <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <div className="qb-inline" style={{ gap: 10 }}>
+            {hasChildren ? (
+              <button
+                type="button"
+                className="qb-nav-link"
+                onClick={() => onToggleCollapse(child.id)}
+                style={{ padding: "4px 8px", minWidth: 36 }}
+              >
+                {isCollapsed ? "+" : "-"}
+              </button>
+            ) : null}
+            <strong><a href={`/items/${child.id}`}>{child.name}</a></strong>
+          </div>
+          {childSummaryParts(child).length > 0 ? <div className="qb-muted">{childSummaryParts(child).join(" | ")}</div> : null}
+        </div>
+        <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {child.hideFromBlueprints ? <Badge label="Ausgeblendet" /> : null}
+          {visibleBadges(child.badges, child.itemCode).map((badge) => {
+            const childScmdbUrl = scmdbUrlForItemCode(child.itemCode);
+            return badge === "SCMDB" && childScmdbUrl ? (
+              <a
+                key={`${child.id}-scmdb`}
+                href={childScmdbUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="qb-badge qb-badge-highlight"
+              >
+                SCMDB
+              </a>
+            ) : (
+              <Badge key={`${child.id}-${badge}`} label={badge} />
+            );
+          })}
+        </div>
+      </div>
+      {!isCollapsed ? child.children.map((nestedChild) => (
+        <ChildBranch
+          key={nestedChild.id}
+          child={nestedChild}
+          depth={depth + 1}
+          collapsedIds={collapsedIds}
+          onToggleCollapse={onToggleCollapse}
+        />
+      )) : null}
+    </div>
+  );
 }
 
 function groupBadgeDefinitions(definitions: BadgeDefinition[]) {
@@ -126,6 +215,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
   const [averageQuality, setAverageQuality] = useState("");
   const [requestNote, setRequestNote] = useState("");
   const [offerNotes, setOfferNotes] = useState<Record<string, string>>({});
+  const [offerHasResources, setOfferHasResources] = useState<Record<string, boolean>>({});
 
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [editingEntryQty, setEditingEntryQty] = useState(1);
@@ -136,10 +226,10 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
   const [mergeKeepValuesFrom, setMergeKeepValuesFrom] = useState<"CURRENT" | "OTHER">("CURRENT");
   const [mergeParentChoice, setMergeParentChoice] = useState<"CURRENT" | "OTHER" | "ROOT">("CURRENT");
   const [collapsedBadgeGroups, setCollapsedBadgeGroups] = useState<string[]>([]);
+  const [collapsedChildIds, setCollapsedChildIds] = useState<string[]>([]);
 
   const canEdit = role !== null && role !== "guest";
   const canAdmin = role === "admin" || role === "superAdmin";
-  const totalQty = useMemo(() => storageDetail?.entries.reduce((sum, entry) => sum + entry.qty, 0) ?? 0, [storageDetail]);
   const amCrafter = Boolean(blueprintDetail?.crafters.some((crafter) => crafter.userId === meUserId));
   const groupedBadgeDefinitions = useMemo(() => groupBadgeDefinitions(storageDetail?.badgeDefinitions ?? []), [storageDetail?.badgeDefinitions]);
   const scmdbUrl = useMemo(() => scmdbUrlForItemCode(storageDetail?.itemCode), [storageDetail?.itemCode]);
@@ -182,6 +272,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
     setItemCode(storageBody.itemCode ?? "");
     setSelectedBadges(storageBody.badges);
     setHideFromBlueprints(storageBody.hideFromBlueprints);
+    setCollapsedChildIds(storageBody.children.map((child) => child.id));
     if (!locationId && storageBody.locationFilters[0]) setLocationId(storageBody.locationFilters[0].id);
 
     if (listRes?.ok) {
@@ -380,7 +471,10 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
       const res = await fetch(`/api/item-search/requests/${requestId}/offers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note: offerNotes[requestId] || null })
+        body: JSON.stringify({
+          note: offerNotes[requestId] || null,
+          hasResources: offerHasResources[requestId] ?? false
+        })
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -388,6 +482,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
         return;
       }
       setOfferNotes((current) => ({ ...current, [requestId]: "" }));
+      setOfferHasResources((current) => ({ ...current, [requestId]: false }));
       await loadAll();
     } finally {
       setBusy(false);
@@ -521,6 +616,15 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
           </div>
         </div>
         <p className="qb-muted">Zentrale Stammdaten fuer Crafting, Lager und Suche.</p>
+        {storageDetail ? (
+          <div className="qb-muted" style={{ marginTop: 8 }}>
+            {[
+              storageDetail.crafterCount > 0 ? `Crafter ${storageDetail.crafterCount}` : null,
+              storageDetail.totalQty > 0 ? `Lager ${storageDetail.totalQty}` : null,
+              storageDetail.openSearchCount > 0 ? `Suche ${storageDetail.openSearchCount}` : null
+            ].filter(Boolean).join(" | ")}
+          </div>
+        ) : null}
         {scmdbUrl ? <div className="qb-inline" style={{ marginTop: 8 }}><a href={scmdbUrl} target="_blank" rel="noreferrer" className="qb-nav-link">SCMDB oeffnen</a></div> : null}
         {canEdit && storageDetail ? (
           <form className="qb-form" onSubmit={saveItem}>
@@ -580,7 +684,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
 
       <Card>
         <h2 className="qb-card-title">Lager</h2>
-        <p className="qb-muted">Aktuell eingelagert: {totalQty}</p>
+        <p className="qb-muted">Aktuell eingelagert: {storageDetail?.totalQty ?? 0}</p>
         {!storageDetail || storageDetail.entries.length === 0 ? <p className="qb-muted">Noch keine Eintraege vorhanden.</p> : (
           <div className="qb-grid">
             {storageDetail.entries.map((entry) => (
@@ -678,8 +782,9 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                     ) : (
                       request.offers.map((offer) => (
                         <div key={offer.id}>
-                          <div className="qb-inline" style={{ justifyContent: "space-between" }}>
+                          <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12 }}>
                             <span>{offer.username}</span>
+                            {offer.hasResources ? <Badge label="Ressourcen vorhanden" /> : null}
                           </div>
                           {offer.note ? <div className="qb-muted">{offer.note}</div> : null}
                         </div>
@@ -688,6 +793,14 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                   </div>
                   {canOffer ? (
                     <div className="qb-form" style={{ marginTop: 8 }}>
+                      <label className="qb-inline" style={{ gap: 8, alignItems: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={offerHasResources[request.id] ?? false}
+                          onChange={(e) => setOfferHasResources((current) => ({ ...current, [request.id]: e.target.checked }))}
+                        />
+                        <span>Ich habe die Ressourcen dafuer</span>
+                      </label>
                       <TextArea
                         rows={2}
                         placeholder="Was kannst du bereitstellen? (optional)"
@@ -747,31 +860,12 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
         ) : (
           <div className="qb-grid">
             {storageDetail.children.map((child) => (
-              <Card key={child.id}>
-                <div className="qb-inline" style={{ justifyContent: "space-between" }}>
-                  <strong><a href={`/items/${child.id}`}>{child.name}</a></strong>
-                  <div className="qb-inline" style={{ gap: 8 }}>
-                    {child.hideFromBlueprints ? <Badge label="Ausgeblendet" /> : null}
-                    {visibleBadges(child.badges, child.itemCode).map((badge) => {
-                      const childScmdbUrl = scmdbUrlForItemCode(child.itemCode);
-                      return badge === "SCMDB" && childScmdbUrl ? (
-                        <a
-                          key={`${child.id}-scmdb`}
-                          href={childScmdbUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="qb-badge qb-badge-highlight"
-                        >
-                          SCMDB
-                        </a>
-                      ) : (
-                        <Badge key={`${child.id}-${badge}`} label={badge} />
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="qb-muted">Crafter {child.crafterCount} | Lager {child.totalQty} | Suche {child.openSearchCount}</div>
-              </Card>
+              <ChildBranch
+                key={child.id}
+                child={child}
+                collapsedIds={collapsedChildIds}
+                onToggleCollapse={(id) => setCollapsedChildIds((current) => toggleValue(current, id))}
+              />
             ))}
           </div>
         )}

@@ -19,6 +19,7 @@ type ItemNode = {
   itemCode?: string | null;
   badges: string[];
   hideFromBlueprints: boolean;
+  craftedByMe: boolean;
   crafterCount: number;
   totalQty: number;
   openSearchCount: number;
@@ -76,6 +77,14 @@ function parseBadges(input: string) {
   return input.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+function itemSummaryParts(node: Pick<ItemNode, "crafterCount" | "totalQty" | "openSearchCount">) {
+  const parts: string[] = [];
+  if (node.crafterCount > 0) parts.push(`Crafter ${node.crafterCount}`);
+  if (node.totalQty > 0) parts.push(`Lager ${node.totalQty}`);
+  if (node.openSearchCount > 0) parts.push(`Suche ${node.openSearchCount}`);
+  return parts;
+}
+
 function findItemById(nodes: ItemNode[], id: string): ItemNode | null {
   for (const node of nodes) {
     if (node.id === id) return node;
@@ -94,9 +103,25 @@ function findLocationById(nodes: LocationNode[], id: string): LocationNode | nul
   return null;
 }
 
+function updateTreeNode(nodes: ItemNode[], targetId: string, updater: (node: ItemNode) => ItemNode): ItemNode[] {
+  return nodes.map((node) => {
+    if (node.id === targetId) {
+      return updater(node);
+    }
+    if (node.children.length === 0) {
+      return node;
+    }
+    const nextChildren = updateTreeNode(node.children, targetId, updater);
+    if (nextChildren === node.children) {
+      return node;
+    }
+    return { ...node, children: nextChildren };
+  });
+}
+
 function collectCollapsedItemIdsBeyondDepth(nodes: ItemNode[], depth = 0): string[] {
   return nodes.flatMap((node) => [
-    ...(node.children.length > 0 && depth >= 2 ? [node.id] : []),
+    ...(node.children.length > 0 && depth >= 1 ? [node.id] : []),
     ...collectCollapsedItemIdsBeyondDepth(node.children, depth + 1)
   ]);
 }
@@ -136,22 +161,27 @@ function filterTree(
   activeBadges: string[],
   activeLocations: string[],
   resourcesOnly: boolean,
-  wantedAndCraftableOnly: boolean,
-  wantedCraftableWithResourcesOnly: boolean
+  wantedAndCraftableOnly: boolean
 ): ItemNode[] {
   const needle = search.trim().toLowerCase();
-  const badgeSet = new Set(activeBadges.map((item) => item.toLowerCase()));
+  const badgeSet = activeBadges.map((item) => item.toLowerCase());
   const locationSet = new Set(activeLocations);
 
   return nodes.flatMap((node) => {
+    const directChildTotalQty = node.children.reduce((sum, child) => sum + child.totalQty, 0);
+    const directChildOpenSearchCount = node.children.reduce((sum, child) => sum + child.openSearchCount, 0);
+    const directChildEntryCount = node.children.reduce((sum, child) => sum + child.entryCount, 0);
+    const ownTotalQty = Math.max(0, node.totalQty - directChildTotalQty);
+    const ownOpenSearchCount = Math.max(0, node.openSearchCount - directChildOpenSearchCount);
+    const ownEntryCount = Math.max(0, node.entryCount - directChildEntryCount);
+
     const filteredChildren = filterTree(
       node.children,
       search,
       activeBadges,
       activeLocations,
       resourcesOnly,
-      wantedAndCraftableOnly,
-      wantedCraftableWithResourcesOnly
+      wantedAndCraftableOnly
     );
     const matchesSearch =
       needle.length === 0 ||
@@ -160,12 +190,11 @@ function filterTree(
       (node.itemCode ?? "").toLowerCase().includes(needle) ||
       node.badges.some((badge) => badge.toLowerCase().includes(needle)) ||
       node.locations.some((location) => location.label.toLowerCase().includes(needle));
-    const matchesBadges = badgeSet.size === 0 || node.badges.some((badge) => badgeSet.has(badge.toLowerCase()));
+    const nodeBadgeSet = new Set(node.badges.map((badge) => badge.toLowerCase()));
+    const matchesBadges = badgeSet.length === 0 || badgeSet.every((badge) => nodeBadgeSet.has(badge));
     const matchesLocations = locationSet.size === 0 || node.locations.some((location) => locationSet.has(location.id));
     const matchesResourceFilter = !resourcesOnly || node.badges.some((badge) => badge.toLowerCase() === "ressource");
     const matchesWantedCraftableFilter = !wantedAndCraftableOnly || (node.openSearchCount > 0 && node.crafterCount > 0);
-    const matchesWantedCraftableWithResourcesFilter =
-      !wantedCraftableWithResourcesOnly || (node.openSearchCount > 0 && node.crafterCount > 0 && node.totalQty > 0);
 
     if (
       filteredChildren.length > 0 ||
@@ -173,10 +202,15 @@ function filterTree(
         matchesBadges &&
         matchesLocations &&
         matchesResourceFilter &&
-        matchesWantedCraftableFilter &&
-        matchesWantedCraftableWithResourcesFilter)
+        matchesWantedCraftableFilter)
     ) {
-      return [{ ...node, children: filteredChildren }];
+      return [{
+        ...node,
+        totalQty: ownTotalQty + filteredChildren.reduce((sum, child) => sum + child.totalQty, 0),
+        openSearchCount: ownOpenSearchCount + filteredChildren.reduce((sum, child) => sum + child.openSearchCount, 0),
+        entryCount: ownEntryCount + filteredChildren.reduce((sum, child) => sum + child.entryCount, 0),
+        children: filteredChildren
+      }];
     }
     return [];
   });
@@ -186,10 +220,13 @@ function ItemBranch({
   node,
   depth = 0,
   editMode,
+  canQuickCraft,
+  quickCraftBusyId,
   draggedId,
   moveBusyId,
   collapsedIds,
   onToggleCollapse,
+  onToggleCraft,
   onDragStart,
   onDragEnd,
   onDropOnNode
@@ -197,10 +234,13 @@ function ItemBranch({
   node: ItemNode;
   depth?: number;
   editMode: boolean;
+  canQuickCraft: boolean;
+  quickCraftBusyId: string | null;
   draggedId: string | null;
   moveBusyId: string | null;
   collapsedIds: string[];
   onToggleCollapse: (nodeId: string) => void;
+  onToggleCraft: (node: ItemNode) => void;
   onDragStart: (node: ItemNode) => void;
   onDragEnd: () => void;
   onDropOnNode: (node: ItemNode) => void;
@@ -213,7 +253,7 @@ function ItemBranch({
   const displayDescription = visibleDescription(node.description);
 
   return (
-    <div style={{ marginLeft: depth * 18, marginTop: depth === 0 ? 0 : 10 }}>
+    <div style={{ marginLeft: depth * 18, marginTop: depth === 0 ? 0 : 10, marginBottom: depth === 0 ? 14 : 0 }}>
       <div
         className="qb-inline"
         style={{
@@ -250,11 +290,9 @@ function ItemBranch({
             <a href={`/items/${node.id}`}><strong>{node.name}</strong></a>
           </div>
           {displayDescription ? <div className="qb-muted">{displayDescription}</div> : null}
-          <div className="qb-muted">
-            Crafter {node.crafterCount} | Lager {node.totalQty} | Suche {node.openSearchCount}
-          </div>
+          {itemSummaryParts(node).length > 0 ? <div className="qb-muted">{itemSummaryParts(node).join(" | ")}</div> : null}
         </div>
-        <div className="qb-inline" style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <div className="qb-inline" style={{ flexWrap: "wrap", justifyContent: "flex-end", marginLeft: "auto" }}>
           {node.hideFromBlueprints ? <Badge label="In Blueprints ausgeblendet" /> : null}
           {displayBadges.map((badge) => (
             badge === "SCMDB" && scmdbUrl ? (
@@ -271,6 +309,16 @@ function ItemBranch({
               <Badge key={`${node.id}-${badge}`} label={badge} />
             )
           ))}
+          {canQuickCraft ? (
+            <Button
+              type="button"
+              variant={node.craftedByMe ? "secondary" : "primary"}
+              disabled={quickCraftBusyId !== null}
+              onClick={() => onToggleCraft(node)}
+            >
+              {quickCraftBusyId === node.id ? "Speichert..." : node.craftedByMe ? "Kann ich nicht mehr craften" : "Ich kann craften"}
+            </Button>
+          ) : null}
         </div>
       </div>
       {!isCollapsed ? node.children.map((child) => (
@@ -279,10 +327,13 @@ function ItemBranch({
           node={child}
           depth={depth + 1}
           editMode={editMode}
+          canQuickCraft={canQuickCraft}
+          quickCraftBusyId={quickCraftBusyId}
           draggedId={draggedId}
           moveBusyId={moveBusyId}
           collapsedIds={collapsedIds}
           onToggleCollapse={onToggleCollapse}
+          onToggleCraft={onToggleCraft}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
           onDropOnNode={onDropOnNode}
@@ -394,8 +445,10 @@ function LocationBranch({
 export default function ItemsPage() {
   const [data, setData] = useState<ItemsListResponse | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
+  const [meUserId, setMeUserId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [quickCraftBusyId, setQuickCraftBusyId] = useState<string | null>(null);
 
   const [itemEditMode, setItemEditMode] = useState(false);
   const [draggedItem, setDraggedItem] = useState<ItemNode | null>(null);
@@ -414,7 +467,6 @@ export default function ItemsPage() {
   const [activeLocations, setActiveLocations] = useState<string[]>([]);
   const [resourcesOnly, setResourcesOnly] = useState(false);
   const [wantedAndCraftableOnly, setWantedAndCraftableOnly] = useState(false);
-  const [wantedCraftableWithResourcesOnly, setWantedCraftableWithResourcesOnly] = useState(false);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -439,18 +491,22 @@ export default function ItemsPage() {
 
   const canEdit = role !== null && role !== "guest";
   const canAdmin = role === "admin" || role === "superAdmin";
+  const canQuickCraft = canEdit && meUserId !== null;
   const groupedBadgeDefinitions = useMemo(() => groupBadgeDefinitions(data?.badgeDefinitions ?? []), [data?.badgeDefinitions]);
 
-  async function loadAll() {
+  async function loadAll(fresh = false) {
     setError(null);
     const [meRes, listRes] = await Promise.all([
       fetch("/api/me", { cache: "no-store" }),
-      fetch("/api/storage/items")
+      fetch(fresh ? `/api/storage/items?fresh=${Date.now()}` : "/api/storage/items", {
+        cache: fresh ? "no-store" : "default"
+      })
     ]);
 
     if (meRes.ok) {
       const me = await meRes.json();
       setRole((me.role as UserRole | undefined) ?? null);
+      setMeUserId((me.userId as string | undefined) ?? null);
     }
 
     if (!listRes.ok) {
@@ -476,6 +532,41 @@ export default function ItemsPage() {
     setCollapsedItemIds(collectCollapsedItemIdsBeyondDepth(data.items));
     setDefaultCollapsedItemsApplied(true);
   }, [data, defaultCollapsedItemsApplied]);
+
+  async function toggleCraftForNode(node: ItemNode) {
+    if (!meUserId) return;
+    setQuickCraftBusyId(node.id);
+    setError(null);
+    try {
+      const res = node.craftedByMe
+        ? await fetch(`/api/blueprints/${node.id}/crafters/${meUserId}`, { method: "DELETE" })
+        : await fetch(`/api/blueprints/${node.id}/crafters`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+          });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setError(`Crafting-Status speichern fehlgeschlagen (${res.status}) ${text}`);
+        return;
+      }
+      setData((current) => {
+        if (!current) return current;
+        const delta = node.craftedByMe ? -1 : 1;
+        return {
+          ...current,
+          items: updateTreeNode(current.items, node.id, (entry) => ({
+            ...entry,
+            craftedByMe: !entry.craftedByMe,
+            crafterCount: Math.max(0, entry.crafterCount + delta)
+          }))
+        };
+      });
+      void loadAll(true);
+    } finally {
+      setQuickCraftBusyId(null);
+    }
+  }
 
   async function createRootItem(e: FormEvent) {
     e.preventDefault();
@@ -733,18 +824,16 @@ export default function ItemsPage() {
         activeBadges,
         activeLocations,
         resourcesOnly,
-        wantedAndCraftableOnly,
-        wantedCraftableWithResourcesOnly
+        wantedAndCraftableOnly
       ),
-    [data, search, activeBadges, activeLocations, resourcesOnly, wantedAndCraftableOnly, wantedCraftableWithResourcesOnly]
+    [data, search, activeBadges, activeLocations, resourcesOnly, wantedAndCraftableOnly]
   );
   const hasFilters =
     search.trim().length > 0 ||
     activeBadges.length > 0 ||
     activeLocations.length > 0 ||
     resourcesOnly ||
-    wantedAndCraftableOnly ||
-    wantedCraftableWithResourcesOnly;
+    wantedAndCraftableOnly;
 
   return (
     <main className="qb-main">
@@ -763,7 +852,6 @@ export default function ItemsPage() {
                 setActiveLocations([]);
                 setResourcesOnly(false);
                 setWantedAndCraftableOnly(false);
-                setWantedCraftableWithResourcesOnly(false);
               }}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
             >
@@ -774,21 +862,14 @@ export default function ItemsPage() {
         <TextInput placeholder="Suche nach Name, Badge, Location oder Item-Code" value={search} onChange={(e) => setSearch(e.target.value)} />
         <div className="qb-inline" style={{ marginTop: 10, marginBottom: 10 }}>
           <Button type="button" variant={resourcesOnly ? "primary" : "secondary"} onClick={() => setResourcesOnly((value) => !value)}>
-            Nur Ressourcen
+            Ressourcen vorhanden
           </Button>
           <Button
             type="button"
             variant={wantedAndCraftableOnly ? "primary" : "secondary"}
             onClick={() => setWantedAndCraftableOnly((value) => !value)}
           >
-            Gesucht + ich kann craften
-          </Button>
-          <Button
-            type="button"
-            variant={wantedCraftableWithResourcesOnly ? "primary" : "secondary"}
-            onClick={() => setWantedCraftableWithResourcesOnly((value) => !value)}
-          >
-            Gesucht + craftbar + Ressourcen
+            Gesucht und craftbar
           </Button>
         </div>
         <div className="qb-grid" style={{ gap: 10 }}>
@@ -908,10 +989,13 @@ export default function ItemsPage() {
             key={item.id}
             node={item}
             editMode={itemEditMode}
+            canQuickCraft={canQuickCraft}
+            quickCraftBusyId={quickCraftBusyId}
             draggedId={draggedItem?.id ?? null}
             moveBusyId={itemMoveBusyId}
             collapsedIds={collapsedItemIds}
             onToggleCollapse={(nodeId) => setCollapsedItemIds((current) => toggleValue(current, nodeId))}
+            onToggleCraft={(node) => void toggleCraftForNode(node)}
             onDragStart={setDraggedItem}
             onDragEnd={() => setDraggedItem(null)}
             onDropOnNode={(node) => {

@@ -108,6 +108,7 @@ struct StorageItemTreeNodeDTO: Content {
     let latestActivityAt: Date?
     let badges: [String]
     let hideFromBlueprints: Bool
+    let craftedByMe: Bool
     let crafterCount: Int
     let totalQty: Int
     let openSearchCount: Int
@@ -127,6 +128,7 @@ struct StorageItemChildSummaryDTO: Content {
     let totalQty: Int
     let openSearchCount: Int
     let entryCount: Int
+    let children: [StorageItemChildSummaryDTO]
 }
 
 struct StorageBreadcrumbItemDTO: Content {
@@ -153,6 +155,10 @@ struct StorageItemDetailDTO: Content {
     let availableBadges: [String]
     let badgeDefinitions: [ItemBadgeDefinitionDTO]
     let hideFromBlueprints: Bool
+    let crafterCount: Int
+    let totalQty: Int
+    let openSearchCount: Int
+    let entryCount: Int
     let breadcrumb: [StorageBreadcrumbItemDTO]
     let children: [StorageItemChildSummaryDTO]
     let entries: [StorageEntryResponseDTO]
