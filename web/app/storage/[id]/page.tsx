@@ -12,7 +12,7 @@ type Person = { userId: string; username: string };
 type LocationFilter = { id: string; label: string };
 type LocationNode = { id: string; parentId?: string | null; name: string; description?: string | null; children: LocationNode[] };
 type Entry = { id: string; userId: string; username: string; locationId: string; locationLabel: string; qty: number; note?: string | null; createdAt?: string | null };
-type Child = { id: string; name: string; itemCode?: string | null; badges: string[]; totalQty: number; entryCount: number };
+type Child = { id: string; name: string; itemCode?: string | null; badges: string[]; hideFromBlueprints: boolean; totalQty: number; entryCount: number };
 type Breadcrumb = { id: string; name: string };
 type Detail = {
   id: string;
@@ -22,6 +22,7 @@ type Detail = {
   itemCode?: string | null;
   badges: string[];
   availableBadges: string[];
+  hideFromBlueprints: boolean;
   breadcrumb: Breadcrumb[];
   children: Child[];
   entries: Entry[];
@@ -73,6 +74,7 @@ export default function StorageDetailPage({ params }: { params: { id: string } }
   const [itemCode, setItemCode] = useState("");
   const [selectedBadges, setSelectedBadges] = useState<string[]>([]);
   const [newBadgesInput, setNewBadgesInput] = useState("");
+  const [hideFromBlueprints, setHideFromBlueprints] = useState(false);
 
   const [childName, setChildName] = useState("");
   const [childDescription, setChildDescription] = useState("");
@@ -128,6 +130,7 @@ export default function StorageDetailPage({ params }: { params: { id: string } }
     setDescription(body.description ?? "");
     setItemCode(body.itemCode ?? "");
     setSelectedBadges(body.badges);
+    setHideFromBlueprints(body.hideFromBlueprints);
     if (!locationId && body.locationFilters[0]) setLocationId(body.locationFilters[0].id);
 
     if (listRes?.ok) {
@@ -156,7 +159,8 @@ export default function StorageDetailPage({ params }: { params: { id: string } }
           description,
           itemCode: itemCode || null,
           badges: [...selectedBadges, ...parseBadges(newBadgesInput)],
-          parentId: detail.parentId ?? null
+          parentId: detail.parentId ?? null,
+          hideFromBlueprints
         })
       });
       if (!res.ok) {
@@ -345,7 +349,10 @@ export default function StorageDetailPage({ params }: { params: { id: string } }
       <Card>
         <div className="qb-inline" style={{ justifyContent: "space-between" }}>
           <h2 className="qb-card-title">{detail?.name ?? "Item"}</h2>
-          <div className="qb-inline">{detail?.badges.map((badge) => <Badge key={badge} label={badge} />)}</div>
+          <div className="qb-inline">
+            {detail?.hideFromBlueprints ? <Badge label="In Blueprints ausgeblendet" /> : null}
+            {detail?.badges.map((badge) => <Badge key={badge} label={badge} />)}
+          </div>
         </div>
         <p className="qb-muted">Dies sind dieselben Stammdaten wie unter Blueprints. Hier verwaltest du nur den Bestand pro Ort.</p>
         <p className="qb-muted">Aktuell eingelagert: {totalQty}</p>
@@ -360,6 +367,12 @@ export default function StorageDetailPage({ params }: { params: { id: string } }
               ))}
             </div>
             {canAdmin ? <TextInput placeholder="Neue Badges (kommagetrennt)" value={newBadgesInput} onChange={(e) => setNewBadgesInput(e.target.value)} /> : null}
+            {canAdmin ? (
+              <label className="qb-inline" style={{ gap: 8, alignItems: "center" }}>
+                <input type="checkbox" checked={hideFromBlueprints} onChange={(e) => setHideFromBlueprints(e.target.checked)} />
+                <span>In Blueprints ausblenden</span>
+              </label>
+            ) : null}
             <Button type="submit" variant="primary" disabled={busy}>{busy ? "Speichert..." : "Item speichern"}</Button>
           </form>
         ) : null}
@@ -462,7 +475,10 @@ export default function StorageDetailPage({ params }: { params: { id: string } }
               <Card key={child.id}>
                 <div className="qb-inline" style={{ justifyContent: "space-between" }}>
                   <strong><a href={`/storage/${child.id}`}>{child.name}</a></strong>
-                  <span>{child.totalQty}</span>
+                  <div className="qb-inline" style={{ gap: 8 }}>
+                    {child.hideFromBlueprints ? <Badge label="Ausgeblendet" /> : null}
+                    <span>{child.totalQty}</span>
+                  </div>
                 </div>
                 <div className="qb-inline">{child.badges.map((badge) => <Badge key={badge} label={badge} />)}</div>
                 <div className="qb-muted">{child.entryCount} Eintraege</div>

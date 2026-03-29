@@ -38,6 +38,12 @@ public func routes(_ app: Application) throws {
     authed.post("storage", "locations", use: createStorageLocation)
     authed.patch("storage", "locations", ":locationID", use: updateStorageLocation)
     authed.delete("storage", "locations", ":locationID", use: deleteStorageLocation)
+    authed.get("item-search", use: listItemSearchItems)
+    authed.get("item-search", ":itemID", use: getItemSearchItem)
+    authed.post("item-search", ":itemID", "requests", use: createItemSearchRequest)
+    authed.patch("item-search", "requests", ":requestID", "status", use: updateItemSearchRequestStatus)
+    authed.delete("item-search", "requests", ":requestID", use: deleteItemSearchRequest)
+    authed.post("item-search", "requests", ":requestID", "offers", use: createItemSearchOffer)
     authed.get("quests", use: listQuests)
     authed.get("quests", ":questID", use: getQuest)
     authed.post("quests", use: createQuest)
@@ -84,5 +90,9 @@ public func routes(_ app: Application) throws {
         admin.post("data", "import", use: importAllData)
         admin.post("data", "transfer-remote", use: transferRemoteData)
         admin.post("data", "push-remote", use: pushRemoteData)
+        admin.post("items", "import-scmdb", use: importSCMDBItems)
+        admin.post("items", "badges", use: createItemBadgeDefinition)
+        admin.patch("items", "badges", use: updateItemBadgeDefinition)
+        admin.delete("items", "badges", use: deleteItemBadgeDefinition)
     }
 }

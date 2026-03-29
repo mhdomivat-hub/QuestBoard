@@ -33,6 +33,9 @@ final class Blueprint: Model, Content, @unchecked Sendable {
     @OptionalField(key: "badges_csv")
     var badgesCSV: String?
 
+    @Field(key: "hide_from_blueprints")
+    var hideFromBlueprints: Bool
+
     @Enum(key: "category")
     var category: BlueprintCategory
 
@@ -54,6 +57,7 @@ final class Blueprint: Model, Content, @unchecked Sendable {
         description: String? = nil,
         itemCode: String? = nil,
         badgesCSV: String? = nil,
+        hideFromBlueprints: Bool = false,
         category: BlueprintCategory,
         isCraftable: Bool
     ) {
@@ -63,6 +67,7 @@ final class Blueprint: Model, Content, @unchecked Sendable {
         self.description = description
         self.itemCode = itemCode
         self.badgesCSV = badgesCSV
+        self.hideFromBlueprints = hideFromBlueprints
         self.category = category
         self.isCraftable = isCraftable
     }
@@ -87,6 +92,7 @@ struct CreateBlueprint: AsyncMigration {
             .field("description", .string)
             .field("item_code", .string)
             .field("badges_csv", .string)
+            .field("hide_from_blueprints", .bool, .required, .sql(.default(false)))
             .field("category", categoryEnum, .required)
             .field("is_craftable", .bool, .required, .sql(.default(false)))
             .field("created_at", .datetime)
@@ -188,5 +194,31 @@ struct AddBlueprintItemCodeField: AsyncMigration {
         }
 
         try await sql.raw("ALTER TABLE \"\(unsafeRaw: Blueprint.schema)\" DROP COLUMN IF EXISTS \"item_code\"").run()
+    }
+}
+
+struct AddBlueprintHideFromBlueprintsField: AsyncMigration {
+    func prepare(on database: Database) async throws {
+        guard let sql = database as? SQLDatabase else {
+            try await database.schema(Blueprint.schema)
+                .field("hide_from_blueprints", .bool, .required, .sql(.default(false)))
+                .update()
+            return
+        }
+
+        try await sql.raw(
+            "ALTER TABLE \"\(unsafeRaw: Blueprint.schema)\" ADD COLUMN IF NOT EXISTS \"hide_from_blueprints\" BOOLEAN NOT NULL DEFAULT FALSE"
+        ).run()
+    }
+
+    func revert(on database: Database) async throws {
+        guard let sql = database as? SQLDatabase else {
+            try await database.schema(Blueprint.schema)
+                .deleteField("hide_from_blueprints")
+                .update()
+            return
+        }
+
+        try await sql.raw("ALTER TABLE \"\(unsafeRaw: Blueprint.schema)\" DROP COLUMN IF EXISTS \"hide_from_blueprints\"").run()
     }
 }

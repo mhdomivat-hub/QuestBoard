@@ -18,6 +18,7 @@ type BlueprintChild = {
   name: string;
   itemCode?: string | null;
   badges: string[];
+  hideFromBlueprints: boolean;
   isCraftable: boolean;
   childCount: number;
   crafterCount: number;
@@ -36,6 +37,7 @@ type BlueprintDetail = {
   itemCode?: string | null;
   badges: string[];
   availableBadges: string[];
+  hideFromBlueprints: boolean;
   isCraftable: boolean;
   breadcrumb: Breadcrumb[];
   children: BlueprintChild[];
@@ -86,6 +88,7 @@ export default function BlueprintDetailPage({ params }: { params: { id: string }
   const [itemCode, setItemCode] = useState("");
   const [selectedBadges, setSelectedBadges] = useState<string[]>([]);
   const [newBadgesInput, setNewBadgesInput] = useState("");
+  const [hideFromBlueprints, setHideFromBlueprints] = useState(false);
 
   const [childName, setChildName] = useState("");
   const [childDescription, setChildDescription] = useState("");
@@ -133,6 +136,7 @@ export default function BlueprintDetailPage({ params }: { params: { id: string }
     setDescription(body.description ?? "");
     setItemCode(body.itemCode ?? "");
     setSelectedBadges(body.badges);
+    setHideFromBlueprints(body.hideFromBlueprints);
     setNewBadgesInput("");
 
     if (listRes?.ok) {
@@ -162,7 +166,8 @@ export default function BlueprintDetailPage({ params }: { params: { id: string }
           description,
           itemCode: itemCode || null,
           badges: [...selectedBadges, ...parseBadges(newBadgesInput)],
-          parentId: detail.parentId ?? null
+          parentId: detail.parentId ?? null,
+          hideFromBlueprints
         })
       });
       if (!res.ok) {
@@ -308,6 +313,7 @@ export default function BlueprintDetailPage({ params }: { params: { id: string }
           <h2 className="qb-card-title">{detail?.name ?? "Blueprint"}</h2>
           {detail ? (
             <div className="qb-inline">
+              {detail.hideFromBlueprints ? <Badge label="In Blueprints ausgeblendet" /> : null}
               {detail.badges.map((badge) => <Badge key={badge} label={badge} />)}
             </div>
           ) : null}
@@ -331,6 +337,12 @@ export default function BlueprintDetailPage({ params }: { params: { id: string }
             </div>
             {canCreateBadges ? (
               <TextInput placeholder="Neue Badges (kommagetrennt)" value={newBadgesInput} onChange={(e) => setNewBadgesInput(e.target.value)} />
+            ) : null}
+            {canAdmin ? (
+              <label className="qb-inline" style={{ gap: 8, alignItems: "center" }}>
+                <input type="checkbox" checked={hideFromBlueprints} onChange={(e) => setHideFromBlueprints(e.target.checked)} />
+                <span>In Blueprints ausblenden</span>
+              </label>
             ) : null}
             <Button type="submit" variant="primary" disabled={busy}>
               {busy ? "Speichert..." : "Eintrag speichern"}
@@ -413,6 +425,7 @@ export default function BlueprintDetailPage({ params }: { params: { id: string }
               <div className="qb-inline" style={{ justifyContent: "space-between" }}>
                 <strong><a href={`/blueprints/${child.id}`}>{child.name}</a></strong>
                 <div className="qb-inline">
+                  {child.hideFromBlueprints ? <Badge label="Ausgeblendet" /> : null}
                   {child.badges.map((badge) => <Badge key={badge} label={badge} />)}
                 </div>
               </div>

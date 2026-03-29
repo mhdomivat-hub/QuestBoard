@@ -14,3 +14,5 @@ api/.swiftpm
 Thumbs.db
 Caddyfile
 CaddyfileServer
+api/SCMDBSnapshot/*.json
+!api/SCMDBSnapshot/.gitkeep

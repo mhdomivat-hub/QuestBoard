@@ -12,6 +12,16 @@ private func requireStorageAdmin(_ user: User) throws {
     }
 }
 
+private func canAdminChangeBlueprintVisibility(_ user: User) -> Bool {
+    user.role == .admin || user.role == .superAdmin
+}
+
+private func requireItemBadgeAdmin(_ user: User) throws {
+    guard user.role == .admin || user.role == .superAdmin else {
+        throw Abort(.forbidden, reason: "Only admins may manage badges")
+    }
+}
+
 private func sanitizeStorageName(_ raw: String) throws -> String {
     let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else {
@@ -30,6 +40,10 @@ private func sanitizeStorageItemCode(_ raw: String?) -> String? {
     return value.isEmpty ? nil : String(value.prefix(160))
 }
 
+private func sanitizeStorageHideFromBlueprints(_ raw: Bool?) -> Bool {
+    raw ?? false
+}
+
 private func sanitizeStorageBadges(_ values: [String]?) -> [String] {
     var seen: Set<String> = []
     var result: [String] = []
@@ -44,6 +58,26 @@ private func sanitizeStorageBadges(_ values: [String]?) -> [String] {
         if result.count >= 8 { break }
     }
     return result
+}
+
+private func sanitizeItemBadgeName(_ raw: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw Abort(.badRequest, reason: "Badge name required")
+    }
+    return String(trimmed.prefix(32))
+}
+
+private func sanitizeItemBadgeGroupName(_ raw: String?) -> String? {
+    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !trimmed.isEmpty else { return nil }
+    return String(trimmed.prefix(40))
+}
+
+private func badgeGroupMatches(_ definition: ItemBadgeDefinition, groupName: String?) -> Bool {
+    let normalizedLeft = definition.groupName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    let normalizedRight = groupName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    return normalizedLeft == normalizedRight
 }
 
 private func encodeStorageBadges(_ badges: [String]) -> String? {
@@ -159,6 +193,60 @@ private func collectBadges(items: [Blueprint]) -> [String] {
     return result.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
 }
 
+private func buildBadgeDefinitions(
+    items: [Blueprint],
+    definitions: [ItemBadgeDefinition]
+) -> [ItemBadgeDefinitionDTO] {
+    var groupedByName: [String: ItemBadgeDefinitionDTO] = [:]
+
+    for definition in definitions {
+        let key = definition.name.lowercased()
+        groupedByName[key] = .init(name: definition.name, groupName: definition.groupName)
+    }
+
+    for badge in collectBadges(items: items) {
+        let key = badge.lowercased()
+        if groupedByName[key] == nil {
+            groupedByName[key] = .init(name: badge, groupName: nil)
+        }
+    }
+
+    return groupedByName.values.sorted { lhs, rhs in
+        let leftGroup = lhs.groupName ?? ""
+        let rightGroup = rhs.groupName ?? ""
+        if leftGroup.caseInsensitiveCompare(rightGroup) != .orderedSame {
+            return leftGroup.localizedCaseInsensitiveCompare(rightGroup) == .orderedAscending
+        }
+        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+}
+
+private func availableBadgeNames(from definitions: [ItemBadgeDefinitionDTO]) -> [String] {
+    definitions.map(\.name)
+}
+
+private func ensureBadgeDefinitionsExist(
+    badges: [String],
+    actor: User,
+    on database: Database
+) async throws {
+    guard !badges.isEmpty else { return }
+
+    let existing = try await ItemBadgeDefinition.query(on: database).all()
+    var existingByKey = Dictionary(uniqueKeysWithValues: existing.map { ($0.name.lowercased(), $0) })
+
+    for badge in badges {
+        let key = badge.lowercased()
+        if existingByKey[key] != nil {
+            continue
+        }
+        try requireItemBadgeAdmin(actor)
+        let definition = ItemBadgeDefinition(name: badge, groupName: nil)
+        try await definition.save(on: database)
+        existingByKey[key] = definition
+    }
+}
+
 private func buildStorageActivityMap(
     items: [Blueprint],
     entries: [StorageEntry]
@@ -190,7 +278,9 @@ private func buildItemTree(
     parentId: UUID?,
     grouped: [UUID?: [Blueprint]],
     entriesByItem: [UUID: [StorageEntryResponseDTO]],
-    latestActivityMap: [UUID: Date]
+    latestActivityMap: [UUID: Date],
+    crafterCountsByItem: [UUID: Int],
+    openSearchCountsByItem: [UUID: Int]
 ) throws -> [StorageItemTreeNodeDTO] {
     let nodes = (grouped[parentId] ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     return try nodes.map { node in
@@ -199,11 +289,17 @@ private func buildItemTree(
             parentId: id,
             grouped: grouped,
             entriesByItem: entriesByItem,
-            latestActivityMap: latestActivityMap
+            latestActivityMap: latestActivityMap,
+            crafterCountsByItem: crafterCountsByItem,
+            openSearchCountsByItem: openSearchCountsByItem
         )
         let ownEntries = entriesByItem[id] ?? []
         let ownQty = ownEntries.reduce(0) { $0 + $1.qty }
         let childQty = children.reduce(0) { $0 + $1.totalQty }
+        let ownCrafterCount = crafterCountsByItem[id] ?? 0
+        let childCrafterCount = children.reduce(0) { $0 + $1.crafterCount }
+        let ownOpenSearchCount = openSearchCountsByItem[id] ?? 0
+        let childOpenSearchCount = children.reduce(0) { $0 + $1.openSearchCount }
         let people = Dictionary(grouping: ownEntries, by: { $0.userId }).compactMap { _, values in
             values.first.map { StoragePersonDTO(userId: $0.userId, username: $0.username) }
         }.sorted { $0.username.localizedCaseInsensitiveCompare($1.username) == .orderedAscending }
@@ -220,7 +316,10 @@ private func buildItemTree(
             createdAt: node.createdAt,
             latestActivityAt: latestActivityMap[id],
             badges: decodeStorageBadges(node.badgesCSV),
+            hideFromBlueprints: node.hideFromBlueprints,
+            crafterCount: ownCrafterCount + childCrafterCount,
             totalQty: ownQty + childQty,
+            openSearchCount: ownOpenSearchCount + childOpenSearchCount,
             entryCount: ownEntries.count,
             people: people,
             locations: locations,
@@ -229,8 +328,18 @@ private func buildItemTree(
     }
 }
 
-private func storageItemDetail(item: Blueprint, allItems: [Blueprint], locations: [StorageLocation], users: [User], entries: [StorageEntry]) throws -> StorageItemDetailDTO {
+private func storageItemDetail(
+    item: Blueprint,
+    allItems: [Blueprint],
+    badgeDefinitions: [ItemBadgeDefinition],
+    locations: [StorageLocation],
+    users: [User],
+    entries: [StorageEntry],
+    crafterCountsByItem: [UUID: Int],
+    openSearchCountsByItem: [UUID: Int]
+) throws -> StorageItemDetailDTO {
     guard let itemId = item.id else { throw Abort(.internalServerError) }
+    let badgeDefinitionsDTO = buildBadgeDefinitions(items: allItems, definitions: badgeDefinitions)
     let itemsById = Dictionary(uniqueKeysWithValues: allItems.compactMap { entry in
         entry.id.map { ($0, entry) }
     })
@@ -255,17 +364,23 @@ private func storageItemDetail(item: Blueprint, allItems: [Blueprint], locations
     } + [StorageBreadcrumbItemDTO(id: itemId, name: item.name)]
 
     let entryDtos = entryDTOs(entries: entries.filter { $0.$item.id == itemId }, usersById: usersById, locationsById: locationsById)
-    let childSummaries = try (groupedItems[itemId] ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }.map { child in
+    var childSummaries: [StorageItemChildSummaryDTO] = []
+    for child in (groupedItems[itemId] ?? []).sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) {
         guard let childId = child.id else { throw Abort(.internalServerError) }
         let childEntries = entries.filter { $0.$item.id == childId }
         let childQty = childEntries.reduce(0) { $0 + $1.qty }
-        return StorageItemChildSummaryDTO(
-            id: childId,
-            name: child.name,
-            itemCode: child.itemCode,
-            badges: decodeStorageBadges(child.badgesCSV),
-            totalQty: childQty,
-            entryCount: childEntries.count
+        childSummaries.append(
+            .init(
+                id: childId,
+                name: child.name,
+                itemCode: child.itemCode,
+                badges: decodeStorageBadges(child.badgesCSV),
+                hideFromBlueprints: child.hideFromBlueprints,
+                crafterCount: crafterCountsByItem[childId] ?? 0,
+                totalQty: childQty,
+                openSearchCount: openSearchCountsByItem[childId] ?? 0,
+                entryCount: childEntries.count
+            )
         )
     }
 
@@ -276,7 +391,9 @@ private func storageItemDetail(item: Blueprint, allItems: [Blueprint], locations
         description: item.description,
         itemCode: item.itemCode,
         badges: decodeStorageBadges(item.badgesCSV),
-        availableBadges: collectBadges(items: allItems),
+        availableBadges: availableBadgeNames(from: badgeDefinitionsDTO),
+        badgeDefinitions: badgeDefinitionsDTO,
+        hideFromBlueprints: item.hideFromBlueprints,
         breadcrumb: breadcrumb,
         children: childSummaries,
         entries: entryDtos,
@@ -295,6 +412,10 @@ func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
     let locations = try await StorageLocation.query(on: req.db).all()
     let entries = try await StorageEntry.query(on: req.db).all()
     let users = try await User.query(on: req.db).all()
+    let crafters = try await BlueprintCrafter.query(on: req.db).all()
+    let searchRequests = try await ItemSearchRequest.query(on: req.db).all()
+    let badgeDefinitions = try await ItemBadgeDefinition.query(on: req.db).all()
+    let badgeDefinitionsDTO = buildBadgeDefinitions(items: items, definitions: badgeDefinitions)
 
     let usersById = Dictionary(uniqueKeysWithValues: users.compactMap { entry in
         entry.id.map { ($0, entry) }
@@ -314,12 +435,16 @@ func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
     let groupedItems = Dictionary(grouping: items, by: { $0.$parent.id })
     let groupedLocations = Dictionary(grouping: locations, by: { $0.$parent.id })
     let latestActivityMap = buildStorageActivityMap(items: items, entries: entries)
+    let crafterCountsByItem = Dictionary(grouping: crafters, by: { $0.$blueprint.id }).mapValues(\.count)
+    let openSearchCountsByItem = Dictionary(grouping: searchRequests.filter { $0.status == .open }, by: { $0.$item.id }).mapValues(\.count)
 
     let itemTree = try buildItemTree(
         parentId: nil,
         grouped: groupedItems,
         entriesByItem: entriesByItem,
-        latestActivityMap: latestActivityMap
+        latestActivityMap: latestActivityMap,
+        crafterCountsByItem: crafterCountsByItem,
+        openSearchCountsByItem: openSearchCountsByItem
     )
     let filteredUsers = availablePeople(from: users.filter { user in
         guard let userId = user.id else { return false }
@@ -328,7 +453,8 @@ func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
 
     return .init(
         items: itemTree,
-        availableBadges: collectBadges(items: items),
+        availableBadges: availableBadgeNames(from: badgeDefinitionsDTO),
+        badgeDefinitions: badgeDefinitionsDTO,
         availableUsers: filteredUsers,
         locations: try buildLocationTree(parentId: nil, grouped: groupedLocations),
         locationFilters: locationFilters(from: locations)
@@ -347,25 +473,40 @@ func getStorageItem(_ req: Request) async throws -> StorageItemDetailDTO {
     let locations = try await StorageLocation.query(on: req.db).all()
     let entries = try await StorageEntry.query(on: req.db).all()
     let users = try await User.query(on: req.db).all()
-    return try storageItemDetail(item: item, allItems: items, locations: locations, users: users, entries: entries)
+    let crafters = try await BlueprintCrafter.query(on: req.db).all()
+    let searchRequests = try await ItemSearchRequest.query(on: req.db).all()
+    let badgeDefinitions = try await ItemBadgeDefinition.query(on: req.db).all()
+    return try storageItemDetail(
+        item: item,
+        allItems: items,
+        badgeDefinitions: badgeDefinitions,
+        locations: locations,
+        users: users,
+        entries: entries,
+        crafterCountsByItem: Dictionary(grouping: crafters, by: { $0.$blueprint.id }).mapValues(\.count),
+        openSearchCountsByItem: Dictionary(grouping: searchRequests.filter { $0.status == .open }, by: { $0.$item.id }).mapValues(\.count)
+    )
 }
 
 func createStorageItem(_ req: Request) async throws -> StorageItemDetailDTO {
     let actor = try requireStorageEditor(req)
     let body = try req.content.decode(StorageItemCreateDTO.self)
+    let badges = sanitizeStorageBadges(body.badges)
     if body.parentId == nil {
         try requireStorageAdmin(actor)
     }
     if let parentId = body.parentId, try await Blueprint.find(parentId, on: req.db) == nil {
         throw Abort(.badRequest, reason: "Parent item not found")
     }
+    try await ensureBadgeDefinitionsExist(badges: badges, actor: actor, on: req.db)
 
     let item = Blueprint(
         parentID: body.parentId,
         name: try sanitizeStorageName(body.name),
         description: sanitizeStorageDescription(body.description),
         itemCode: sanitizeStorageItemCode(body.itemCode),
-        badgesCSV: encodeStorageBadges(sanitizeStorageBadges(body.badges)),
+        badgesCSV: encodeStorageBadges(badges),
+        hideFromBlueprints: canAdminChangeBlueprintVisibility(actor) ? sanitizeStorageHideFromBlueprints(body.hideFromBlueprints) : false,
         category: .blueprints,
         isCraftable: false
     )
@@ -382,6 +523,7 @@ func updateStorageItem(_ req: Request) async throws -> StorageItemDetailDTO {
     }
 
     let body = try req.content.decode(StorageItemUpdateDTO.self)
+    let badges = sanitizeStorageBadges(body.badges)
     let itemId = try item.requireID()
     let allItems = try await Blueprint.query(on: req.db)
         .filter(\.$category == .blueprints)
@@ -401,12 +543,16 @@ func updateStorageItem(_ req: Request) async throws -> StorageItemDetailDTO {
             throw Abort(.badRequest, reason: "Invalid item hierarchy")
         }
     }
+    try await ensureBadgeDefinitionsExist(badges: badges, actor: actor, on: req.db)
 
     item.$parent.id = body.parentId
     item.name = try sanitizeStorageName(body.name)
     item.description = sanitizeStorageDescription(body.description)
     item.itemCode = sanitizeStorageItemCode(body.itemCode)
-    item.badgesCSV = encodeStorageBadges(sanitizeStorageBadges(body.badges))
+    item.badgesCSV = encodeStorageBadges(badges)
+    if canAdminChangeBlueprintVisibility(actor) {
+        item.hideFromBlueprints = sanitizeStorageHideFromBlueprints(body.hideFromBlueprints)
+    }
     try await item.save(on: req.db)
 
     await recordAuditEvent(on: req, actor: actor, action: "storage.item.update", entityType: "storage_item", entityId: itemId)
@@ -469,6 +615,137 @@ func updateStorageLocation(_ req: Request) async throws -> [StorageLocationNodeD
     try await location.save(on: req.db)
     await recordAuditEvent(on: req, actor: actor, action: "storage.location.update", entityType: "storage_location", entityId: locationId)
     return try await listStorageLocations(req)
+}
+
+func createItemBadgeDefinition(_ req: Request) async throws -> [ItemBadgeDefinitionDTO] {
+    let actor = try requireStorageEditor(req)
+    try requireItemBadgeAdmin(actor)
+    let body = try req.content.decode(ItemBadgeDefinitionCreateDTO.self)
+    let name = try sanitizeItemBadgeName(body.name)
+    let groupName = sanitizeItemBadgeGroupName(body.groupName)
+
+    let existing = try await ItemBadgeDefinition.query(on: req.db).all()
+    guard !existing.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+        throw Abort(.conflict, reason: "Badge already exists")
+    }
+
+    let definition = ItemBadgeDefinition(name: name, groupName: groupName)
+    try await definition.save(on: req.db)
+    await recordAuditEvent(on: req, actor: actor, action: "item.badge.create", entityType: "item_badge", entityId: definition.id, details: "name=\(name)")
+
+    let items = try await Blueprint.query(on: req.db).filter(\.$category == .blueprints).all()
+    let definitions = try await ItemBadgeDefinition.query(on: req.db).all()
+    return buildBadgeDefinitions(items: items, definitions: definitions)
+}
+
+func updateItemBadgeDefinition(_ req: Request) async throws -> [ItemBadgeDefinitionDTO] {
+    let actor = try requireStorageEditor(req)
+    try requireItemBadgeAdmin(actor)
+    let body = try req.content.decode(ItemBadgeDefinitionUpdateDTO.self)
+    let currentName = try sanitizeItemBadgeName(body.currentName)
+    let newName = try sanitizeItemBadgeName(body.newName)
+    let groupName = sanitizeItemBadgeGroupName(body.groupName)
+
+    let items = try await Blueprint.query(on: req.db).filter(\.$category == .blueprints).all()
+    let definitions = try await ItemBadgeDefinition.query(on: req.db).all()
+    let usedBadges = collectBadges(items: items)
+
+    guard usedBadges.contains(where: { $0.caseInsensitiveCompare(currentName) == .orderedSame }) ||
+          definitions.contains(where: { $0.name.caseInsensitiveCompare(currentName) == .orderedSame }) else {
+        throw Abort(.notFound, reason: "Badge not found")
+    }
+
+    guard !definitions.contains(where: {
+        $0.name.caseInsensitiveCompare(newName) == .orderedSame &&
+        $0.name.caseInsensitiveCompare(currentName) != .orderedSame
+    }) else {
+        throw Abort(.conflict, reason: "Target badge already exists")
+    }
+
+    for item in items {
+        let existingBadges = decodeStorageBadges(item.badgesCSV)
+        guard existingBadges.contains(where: { $0.caseInsensitiveCompare(currentName) == .orderedSame }) else { continue }
+        let updatedBadges = sanitizeStorageBadges(
+            existingBadges.map { badge in
+                badge.caseInsensitiveCompare(currentName) == .orderedSame ? newName : badge
+            }
+        )
+        item.badgesCSV = encodeStorageBadges(updatedBadges)
+        try await item.save(on: req.db)
+    }
+
+    if let existingDefinition = definitions.first(where: { $0.name.caseInsensitiveCompare(currentName) == .orderedSame }) {
+        existingDefinition.name = newName
+        existingDefinition.groupName = groupName
+        try await existingDefinition.save(on: req.db)
+    } else {
+        let definition = ItemBadgeDefinition(name: newName, groupName: groupName)
+        try await definition.save(on: req.db)
+    }
+
+    await recordAuditEvent(on: req, actor: actor, action: "item.badge.update", entityType: "item_badge", details: "from=\(currentName);to=\(newName);group=\(groupName ?? "")")
+
+    let refreshedItems = try await Blueprint.query(on: req.db).filter(\.$category == .blueprints).all()
+    let refreshedDefinitions = try await ItemBadgeDefinition.query(on: req.db).all()
+    return buildBadgeDefinitions(items: refreshedItems, definitions: refreshedDefinitions)
+}
+
+func deleteItemBadgeDefinition(_ req: Request) async throws -> [ItemBadgeDefinitionDTO] {
+    let actor = try requireStorageEditor(req)
+    try requireItemBadgeAdmin(actor)
+    let body = try req.content.decode(ItemBadgeDefinitionDeleteDTO.self)
+    let badgeName = body.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let groupName = sanitizeItemBadgeGroupName(body.groupName)
+
+    let items = try await Blueprint.query(on: req.db).filter(\.$category == .blueprints).all()
+    let definitions = try await ItemBadgeDefinition.query(on: req.db).all()
+    if !badgeName.isEmpty {
+        let normalizedBadgeName = try sanitizeItemBadgeName(badgeName)
+
+        for item in items {
+            let existingBadges = decodeStorageBadges(item.badgesCSV)
+            let updatedBadges = existingBadges.filter { $0.caseInsensitiveCompare(normalizedBadgeName) != .orderedSame }
+            guard updatedBadges.count != existingBadges.count else { continue }
+            item.badgesCSV = encodeStorageBadges(updatedBadges)
+            try await item.save(on: req.db)
+        }
+
+        for definition in definitions where definition.name.caseInsensitiveCompare(normalizedBadgeName) == .orderedSame {
+            try await definition.delete(on: req.db)
+        }
+
+        await recordAuditEvent(on: req, actor: actor, action: "item.badge.delete", entityType: "item_badge", details: "name=\(normalizedBadgeName)")
+    } else {
+        let groupDefinitions = definitions.filter { badgeGroupMatches($0, groupName: groupName) }
+        guard !groupDefinitions.isEmpty else {
+            throw Abort(.notFound, reason: "Badge group not found")
+        }
+
+        let groupBadgeNames = Set(groupDefinitions.map { $0.name.lowercased() })
+        for item in items {
+            let existingBadges = decodeStorageBadges(item.badgesCSV)
+            let updatedBadges = existingBadges.filter { !groupBadgeNames.contains($0.lowercased()) }
+            guard updatedBadges.count != existingBadges.count else { continue }
+            item.badgesCSV = encodeStorageBadges(updatedBadges)
+            try await item.save(on: req.db)
+        }
+
+        for definition in groupDefinitions {
+            try await definition.delete(on: req.db)
+        }
+
+        await recordAuditEvent(
+            on: req,
+            actor: actor,
+            action: "item.badge-group.delete",
+            entityType: "item_badge_group",
+            details: "group=\(groupName ?? "Ohne Gruppe");count=\(groupDefinitions.count)"
+        )
+    }
+
+    let refreshedItems = try await Blueprint.query(on: req.db).filter(\.$category == .blueprints).all()
+    let refreshedDefinitions = try await ItemBadgeDefinition.query(on: req.db).all()
+    return buildBadgeDefinitions(items: refreshedItems, definitions: refreshedDefinitions)
 }
 
 func mergeStorageItem(_ req: Request) async throws -> StorageItemDetailDTO {
@@ -667,5 +944,17 @@ private func getStorageItemById(_ itemId: UUID?, on db: Database) async throws -
     let locations = try await StorageLocation.query(on: db).all()
     let entries = try await StorageEntry.query(on: db).all()
     let users = try await User.query(on: db).all()
-    return try storageItemDetail(item: item, allItems: allItems, locations: locations, users: users, entries: entries)
+    let crafters = try await BlueprintCrafter.query(on: db).all()
+    let searchRequests = try await ItemSearchRequest.query(on: db).all()
+    let badgeDefinitions = try await ItemBadgeDefinition.query(on: db).all()
+    return try storageItemDetail(
+        item: item,
+        allItems: allItems,
+        badgeDefinitions: badgeDefinitions,
+        locations: locations,
+        users: users,
+        entries: entries,
+        crafterCountsByItem: Dictionary(grouping: crafters, by: { $0.$blueprint.id }).mapValues(\.count),
+        openSearchCountsByItem: Dictionary(grouping: searchRequests.filter { $0.status == .open }, by: { $0.$item.id }).mapValues(\.count)
+    )
 }

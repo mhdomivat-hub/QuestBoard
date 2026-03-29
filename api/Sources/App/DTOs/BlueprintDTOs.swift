@@ -6,6 +6,7 @@ struct BlueprintCreateDTO: Content {
     let description: String?
     let itemCode: String?
     let badges: [String]?
+    let hideFromBlueprints: Bool?
 }
 
 struct BlueprintUpdateDTO: Content {
@@ -14,6 +15,7 @@ struct BlueprintUpdateDTO: Content {
     let itemCode: String?
     let badges: [String]
     let parentId: UUID?
+    let hideFromBlueprints: Bool?
 }
 
 struct BlueprintAssignCrafterDTO: Content {
@@ -49,6 +51,7 @@ struct BlueprintTreeNodeDTO: Content {
     let createdAt: Date?
     let latestActivityAt: Date?
     let badges: [String]
+    let hideFromBlueprints: Bool
     let category: BlueprintCategory
     let isCraftable: Bool
     let crafters: [BlueprintCrafterResponseDTO]
@@ -68,6 +71,7 @@ struct BlueprintDetailResponseDTO: Content {
     let itemCode: String?
     let badges: [String]
     let availableBadges: [String]
+    let hideFromBlueprints: Bool
     let category: BlueprintCategory
     let isCraftable: Bool
     let breadcrumb: [BlueprintBreadcrumbItemDTO]
@@ -85,6 +89,7 @@ struct BlueprintChildSummaryDTO: Content {
     let name: String
     let itemCode: String?
     let badges: [String]
+    let hideFromBlueprints: Bool
     let category: BlueprintCategory
     let isCraftable: Bool
     let childCount: Int

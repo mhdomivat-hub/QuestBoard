@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y libssl3 ca-certificates libstdc++6 curl
 WORKDIR /app
 COPY --from=builder /build/.build/release/Run /app/Run
 COPY --from=builder /usr/lib/swift /usr/lib/swift
+COPY --from=builder /build/SCMDBSnapshot /app/SCMDBSnapshot
 ENV LD_LIBRARY_PATH=/usr/lib/swift/linux
 EXPOSE 8080
 CMD ["/app/Run", "serve", "--hostname", "0.0.0.0", "--port", "8080"]

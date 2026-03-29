@@ -49,6 +49,10 @@ private func sanitizeBlueprintItemCode(_ value: String?) -> String? {
     return String(trimmed.prefix(160))
 }
 
+private func sanitizeHideFromBlueprints(_ value: Bool?) -> Bool {
+    value ?? false
+}
+
 private func sanitizeBlueprintBadges(_ values: [String]?) -> [String] {
     var seen: Set<String> = []
     var result: [String] = []
@@ -221,7 +225,8 @@ private func buildBlueprintTree(
         $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
 
-    return try nodes.map { node in
+    return try nodes.compactMap { node in
+        guard !node.hideFromBlueprints else { return nil }
         guard let nodeID = node.id else { throw Abort(.internalServerError) }
         return .init(
             id: nodeID,
@@ -232,6 +237,7 @@ private func buildBlueprintTree(
             createdAt: node.createdAt,
             latestActivityAt: latestActivityMap[nodeID],
             badges: decodeBlueprintBadges(node.badgesCSV),
+            hideFromBlueprints: node.hideFromBlueprints,
             category: node.category,
             isCraftable: node.isCraftable,
             crafters: crafterMap[nodeID] ?? [],
@@ -264,10 +270,11 @@ private func blueprintDetailDTO(
 
     let breadcrumb = breadcrumbIds.compactMap { id -> BlueprintBreadcrumbItemDTO? in
         guard let item = byId[id] else { return nil }
-        return .init(id: id, name: item.name)
+            return .init(id: id, name: item.name)
     } + [.init(id: blueprintID, name: blueprint.name)]
 
     let childDtos = try children
+        .filter { !$0.hideFromBlueprints }
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         .map { child in
             guard let childID = child.id else { throw Abort(.internalServerError) }
@@ -276,6 +283,7 @@ private func blueprintDetailDTO(
                 name: child.name,
                 itemCode: child.itemCode,
                 badges: decodeBlueprintBadges(child.badgesCSV),
+                hideFromBlueprints: child.hideFromBlueprints,
                 category: child.category,
                 isCraftable: child.isCraftable,
                 childCount: groupedByParent[childID]?.count ?? 0,
@@ -291,6 +299,7 @@ private func blueprintDetailDTO(
         itemCode: blueprint.itemCode,
         badges: decodeBlueprintBadges(blueprint.badgesCSV),
         availableBadges: availableBadges,
+        hideFromBlueprints: blueprint.hideFromBlueprints,
         category: blueprint.category,
         isCraftable: blueprint.isCraftable,
         breadcrumb: breadcrumb,
@@ -311,7 +320,7 @@ func listBlueprints(_ req: Request) async throws -> BlueprintListResponseDTO {
         storageEntries: storageEntries
     )
     let groupedByParent = Dictionary(grouping: blueprints, by: { $0.$parent.id })
-    let roots = blueprints.filter { $0.$parent.id == nil && $0.category == .blueprints }
+    let roots = blueprints.filter { $0.$parent.id == nil && $0.category == .blueprints && !$0.hideFromBlueprints }
 
     let tree = try roots
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -326,6 +335,7 @@ func listBlueprints(_ req: Request) async throws -> BlueprintListResponseDTO {
                 createdAt: root.createdAt,
                 latestActivityAt: latestActivityMap[rootID],
                 badges: decodeBlueprintBadges(root.badgesCSV),
+                hideFromBlueprints: root.hideFromBlueprints,
                 category: root.category,
                 isCraftable: root.isCraftable,
                 crafters: crafterMap[rootID] ?? [],
@@ -378,6 +388,7 @@ func createBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO 
         description: sanitizeBlueprintDescription(body.description),
         itemCode: sanitizeBlueprintItemCode(body.itemCode),
         badgesCSV: encodeBlueprintBadges(badges),
+        hideFromBlueprints: sanitizeHideFromBlueprints(body.hideFromBlueprints),
         category: resolvedCategory,
         isCraftable: false
     )
@@ -435,6 +446,9 @@ func updateBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO 
     blueprint.description = sanitizeBlueprintDescription(body.description)
     blueprint.itemCode = sanitizeBlueprintItemCode(body.itemCode)
     blueprint.badgesCSV = encodeBlueprintBadges(badges)
+    if actor.role == .admin || actor.role == .superAdmin {
+        blueprint.hideFromBlueprints = sanitizeHideFromBlueprints(body.hideFromBlueprints)
+    }
     blueprint.category = resolvedCategory
     try await blueprint.save(on: req.db)
 

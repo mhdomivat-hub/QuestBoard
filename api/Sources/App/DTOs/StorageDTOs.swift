@@ -1,5 +1,26 @@
 import Vapor
 
+struct ItemBadgeDefinitionDTO: Content {
+    let name: String
+    let groupName: String?
+}
+
+struct ItemBadgeDefinitionCreateDTO: Content {
+    let name: String
+    let groupName: String?
+}
+
+struct ItemBadgeDefinitionUpdateDTO: Content {
+    let currentName: String
+    let newName: String
+    let groupName: String?
+}
+
+struct ItemBadgeDefinitionDeleteDTO: Content {
+    let name: String
+    let groupName: String?
+}
+
 struct StorageLocationCreateDTO: Content {
     let parentId: UUID?
     let name: String
@@ -18,6 +39,7 @@ struct StorageItemCreateDTO: Content {
     let description: String?
     let itemCode: String?
     let badges: [String]?
+    let hideFromBlueprints: Bool?
 }
 
 struct StorageItemUpdateDTO: Content {
@@ -26,6 +48,7 @@ struct StorageItemUpdateDTO: Content {
     let description: String?
     let itemCode: String?
     let badges: [String]
+    let hideFromBlueprints: Bool?
 }
 
 struct StorageItemMergeDTO: Content {
@@ -84,7 +107,10 @@ struct StorageItemTreeNodeDTO: Content {
     let createdAt: Date?
     let latestActivityAt: Date?
     let badges: [String]
+    let hideFromBlueprints: Bool
+    let crafterCount: Int
     let totalQty: Int
+    let openSearchCount: Int
     let entryCount: Int
     let people: [StoragePersonDTO]
     let locations: [StorageLocationFilterDTO]
@@ -96,7 +122,10 @@ struct StorageItemChildSummaryDTO: Content {
     let name: String
     let itemCode: String?
     let badges: [String]
+    let hideFromBlueprints: Bool
+    let crafterCount: Int
     let totalQty: Int
+    let openSearchCount: Int
     let entryCount: Int
 }
 
@@ -108,6 +137,7 @@ struct StorageBreadcrumbItemDTO: Content {
 struct StorageListResponseDTO: Content {
     let items: [StorageItemTreeNodeDTO]
     let availableBadges: [String]
+    let badgeDefinitions: [ItemBadgeDefinitionDTO]
     let availableUsers: [StoragePersonDTO]
     let locations: [StorageLocationNodeDTO]
     let locationFilters: [StorageLocationFilterDTO]
@@ -121,6 +151,8 @@ struct StorageItemDetailDTO: Content {
     let itemCode: String?
     let badges: [String]
     let availableBadges: [String]
+    let badgeDefinitions: [ItemBadgeDefinitionDTO]
+    let hideFromBlueprints: Bool
     let breadcrumb: [StorageBreadcrumbItemDTO]
     let children: [StorageItemChildSummaryDTO]
     let entries: [StorageEntryResponseDTO]
