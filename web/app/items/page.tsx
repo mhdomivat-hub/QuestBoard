@@ -316,7 +316,7 @@ function ItemBranch({
               disabled={quickCraftBusyId !== null}
               onClick={() => onToggleCraft(node)}
             >
-              {quickCraftBusyId === node.id ? "Speichert..." : node.craftedByMe ? "Kann ich nicht mehr craften" : "Ich kann craften"}
+              {quickCraftBusyId === node.id ? "Speichert..." : node.craftedByMe ? "Kann ich nicht mehr craften" : "Kann ich craften"}
             </Button>
           ) : null}
         </div>
