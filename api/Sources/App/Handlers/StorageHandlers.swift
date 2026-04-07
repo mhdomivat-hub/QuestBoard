@@ -35,6 +35,28 @@ private func sanitizeStorageDescription(_ raw: String?) -> String? {
     return value.isEmpty ? nil : String(value.prefix(1000))
 }
 
+private func mergeStorageNotes(_ left: String?, _ right: String?) -> String? {
+    let values = [left, right]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+    guard !values.isEmpty else { return nil }
+
+    var seen: Set<String> = []
+    let unique = values.filter { value in
+        let key = value.lowercased()
+        if seen.contains(key) { return false }
+        seen.insert(key)
+        return true
+    }
+
+    return sanitizeStorageDescription(unique.joined(separator: " | "))
+}
+
+private func normalizedStorageNoteKey(_ note: String?) -> String {
+    sanitizeStorageDescription(note)?.lowercased() ?? ""
+}
+
 private func sanitizeStorageItemCode(_ raw: String?) -> String? {
     let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return value.isEmpty ? nil : String(value.prefix(160))
@@ -952,6 +974,80 @@ func updateStorageEntry(_ req: Request) async throws -> StorageItemDetailDTO {
         details: "qty=\(body.qty)"
     )
     return try await getStorageItemById(itemId, on: req.db)
+}
+
+func moveOwnStorageEntries(_ req: Request) async throws -> MoveOwnStorageEntriesResponseDTO {
+    let actor = try requireStorageEditor(req)
+    let actorId = try actor.requireID()
+    let body = try req.content.decode(MoveOwnStorageEntriesDTO.self)
+
+    guard try await StorageLocation.find(body.locationId, on: req.db) != nil else {
+        throw Abort(.badRequest, reason: "Location not found")
+    }
+
+    let entries = try await StorageEntry.query(on: req.db)
+        .filter(\.$user.$id == actorId)
+        .all()
+
+    let groupedByItem = Dictionary(grouping: entries, by: { $0.$item.id })
+
+    let result = try await req.db.transaction { database -> (movedEntries: Int, mergedItems: Int) in
+        var movedEntries = 0
+        var mergedItems = 0
+
+        for (_, itemEntries) in groupedByItem {
+            let groupedByNote = Dictionary(grouping: itemEntries, by: { normalizedStorageNoteKey($0.note) })
+
+            for (_, noteEntries) in groupedByNote {
+                let targetEntries = noteEntries.filter { $0.$location.id == body.locationId }
+                let otherEntries = noteEntries.filter { $0.$location.id != body.locationId }
+
+                guard !otherEntries.isEmpty || targetEntries.count > 1 else {
+                    continue
+                }
+
+                let primary: StorageEntry
+                if let existingTarget = targetEntries.first {
+                    primary = existingTarget
+                } else if let firstOther = otherEntries.first {
+                    primary = firstOther
+                    primary.$location.id = body.locationId
+                    movedEntries += 1
+                } else {
+                    continue
+                }
+
+                let duplicates = noteEntries.filter { $0.id != primary.id }
+                if !duplicates.isEmpty {
+                    mergedItems += 1
+                }
+
+                for duplicate in duplicates {
+                    primary.qty += duplicate.qty
+                    primary.note = mergeStorageNotes(primary.note, duplicate.note)
+                    if duplicate.$location.id != body.locationId {
+                        movedEntries += 1
+                    }
+                    try await duplicate.delete(on: database)
+                }
+
+                try await primary.save(on: database)
+            }
+        }
+
+        return (movedEntries, mergedItems)
+    }
+
+    await recordAuditEvent(
+        on: req,
+        actor: actor,
+        action: "storage.entry.move-own",
+        entityType: "storage_location",
+        entityId: body.locationId,
+        details: "movedEntries=\(result.movedEntries);mergedItems=\(result.mergedItems)"
+    )
+
+    return .init(locationId: body.locationId, movedEntries: result.movedEntries, mergedItems: result.mergedItems)
 }
 
 private func getStorageItemById(_ itemId: UUID?, on db: Database) async throws -> StorageItemDetailDTO {

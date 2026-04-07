@@ -11,6 +11,26 @@ type UserRole = "guest" | "member" | "admin" | "superAdmin";
 type LocationFilter = { id: string; label: string };
 type LocationNode = { id: string; parentId?: string | null; name: string; description?: string | null; children: LocationNode[] };
 type BadgeDefinition = { name: string; groupName?: string | null };
+type Person = { userId: string; username: string };
+type InventoryMatch = {
+  requestId: string;
+  itemId: string;
+  matchedItemId: string;
+  itemName: string;
+  requesterUserId: string;
+  requesterUsername: string;
+  entryId: string;
+  entryOwnerUserId: string;
+  entryOwnerUsername: string;
+  locationId: string;
+  locationLabel: string;
+  requestedQty: number;
+  availableQty: number;
+  averageQuality?: string | null;
+  note?: string | null;
+  hasEnoughQty: boolean;
+  createdAt?: string | null;
+};
 type ItemNode = {
   id: string;
   parentId?: string | null;
@@ -24,6 +44,7 @@ type ItemNode = {
   totalQty: number;
   openSearchCount: number;
   entryCount: number;
+  people: Person[];
   locations: LocationFilter[];
   children: ItemNode[];
 };
@@ -161,7 +182,9 @@ function filterTree(
   activeBadges: string[],
   activeLocations: string[],
   resourcesOnly: boolean,
-  wantedAndCraftableOnly: boolean
+  wantedAndCraftableOnly: boolean,
+  ownInventoryOnly: boolean,
+  meUserId: string | null
 ): ItemNode[] {
   const needle = search.trim().toLowerCase();
   const badgeSet = activeBadges.map((item) => item.toLowerCase());
@@ -181,7 +204,9 @@ function filterTree(
       activeBadges,
       activeLocations,
       resourcesOnly,
-      wantedAndCraftableOnly
+      wantedAndCraftableOnly,
+      ownInventoryOnly,
+      meUserId
     );
     const matchesSearch =
       needle.length === 0 ||
@@ -195,6 +220,7 @@ function filterTree(
     const matchesLocations = locationSet.size === 0 || node.locations.some((location) => locationSet.has(location.id));
     const matchesResourceFilter = !resourcesOnly || node.badges.some((badge) => badge.toLowerCase() === "ressource");
     const matchesWantedCraftableFilter = !wantedAndCraftableOnly || (node.openSearchCount > 0 && node.crafterCount > 0);
+    const matchesOwnInventoryFilter = !ownInventoryOnly || Boolean(meUserId && node.people.some((person) => person.userId === meUserId));
 
     if (
       filteredChildren.length > 0 ||
@@ -202,7 +228,8 @@ function filterTree(
         matchesBadges &&
         matchesLocations &&
         matchesResourceFilter &&
-        matchesWantedCraftableFilter)
+        matchesWantedCraftableFilter &&
+        matchesOwnInventoryFilter)
     ) {
       return [{
         ...node,
@@ -444,6 +471,7 @@ function LocationBranch({
 
 export default function ItemsPage() {
   const [data, setData] = useState<ItemsListResponse | null>(null);
+  const [inventoryMatches, setInventoryMatches] = useState<InventoryMatch[]>([]);
   const [role, setRole] = useState<UserRole | null>(null);
   const [meUserId, setMeUserId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -467,6 +495,7 @@ export default function ItemsPage() {
   const [activeLocations, setActiveLocations] = useState<string[]>([]);
   const [resourcesOnly, setResourcesOnly] = useState(false);
   const [wantedAndCraftableOnly, setWantedAndCraftableOnly] = useState(false);
+  const [ownInventoryOnly, setOwnInventoryOnly] = useState(false);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -483,11 +512,13 @@ export default function ItemsPage() {
   const [locationName, setLocationName] = useState("");
   const [locationDescription, setLocationDescription] = useState("");
   const [locationParentId, setLocationParentId] = useState("");
+  const [moveOwnInventoryLocationId, setMoveOwnInventoryLocationId] = useState("");
   const [scmdbSourceURL, setScmdbSourceURL] = useState("https://scmdb.net/?page=fab");
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<SCMDBImportResult | null>(null);
   const [collapsedBadgeGroups, setCollapsedBadgeGroups] = useState<string[]>([]);
+  const [adminSectionCollapsed, setAdminSectionCollapsed] = useState(true);
 
   const canEdit = role !== null && role !== "guest";
   const canAdmin = role === "admin" || role === "superAdmin";
@@ -496,11 +527,12 @@ export default function ItemsPage() {
 
   async function loadAll(fresh = false) {
     setError(null);
-    const [meRes, listRes] = await Promise.all([
+    const [meRes, listRes, matchRes] = await Promise.all([
       fetch("/api/me", { cache: "no-store" }),
       fetch(fresh ? `/api/storage/items?fresh=${Date.now()}` : "/api/storage/items", {
         cache: fresh ? "no-store" : "default"
-      })
+      }),
+      fetch("/api/item-search/matches/mine", { cache: "no-store" })
     ]);
 
     if (meRes.ok) {
@@ -513,8 +545,13 @@ export default function ItemsPage() {
       setError(`Items load failed (${listRes.status})`);
       return;
     }
+    if (!matchRes.ok) {
+      setError(`Inventory matches load failed (${matchRes.status})`);
+      return;
+    }
 
     setData((await listRes.json()) as ItemsListResponse);
+    setInventoryMatches((await matchRes.json()) as InventoryMatch[]);
   }
 
   useEffect(() => {
@@ -532,6 +569,12 @@ export default function ItemsPage() {
     setCollapsedItemIds(collectCollapsedItemIdsBeyondDepth(data.items));
     setDefaultCollapsedItemsApplied(true);
   }, [data, defaultCollapsedItemsApplied]);
+
+  useEffect(() => {
+    if (!moveOwnInventoryLocationId && data?.locationFilters[0]) {
+      setMoveOwnInventoryLocationId(data.locationFilters[0].id);
+    }
+  }, [data, moveOwnInventoryLocationId]);
 
   async function toggleCraftForNode(node: ItemNode) {
     if (!meUserId) return;
@@ -565,6 +608,52 @@ export default function ItemsPage() {
       void loadAll(true);
     } finally {
       setQuickCraftBusyId(null);
+    }
+  }
+
+  async function fulfillRequestFromMatch(match: InventoryMatch) {
+    if (!window.confirm(`Anfrage von ${match.requesterUsername} ueber ${match.requestedQty}x ${match.itemName} erfuellen?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/item-search/requests/${match.requestId}/fulfill-from-entry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entryId: match.entryId })
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setError(`Anfrage erfuellen fehlgeschlagen (${res.status}) ${text}`);
+        return;
+      }
+      await loadAll(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function moveOwnInventoryToLocation(e: FormEvent) {
+    e.preventDefault();
+    if (!moveOwnInventoryLocationId) {
+      setError("Bitte zuerst einen Lagerort auswaehlen.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/storage/entries/move-own", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locationId: moveOwnInventoryLocationId })
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setError(`Eigenes Inventar verschieben fehlgeschlagen (${res.status}) ${text}`);
+        return;
+      }
+      await loadAll(true);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -817,27 +906,71 @@ export default function ItemsPage() {
   }
 
   const filteredItems = useMemo(
-    () =>
-      filterTree(
-        data?.items ?? [],
-        search,
-        activeBadges,
-        activeLocations,
-        resourcesOnly,
-        wantedAndCraftableOnly
-      ),
-    [data, search, activeBadges, activeLocations, resourcesOnly, wantedAndCraftableOnly]
+      () =>
+        filterTree(
+          data?.items ?? [],
+          search,
+          activeBadges,
+          activeLocations,
+          resourcesOnly,
+          wantedAndCraftableOnly,
+          ownInventoryOnly,
+          meUserId
+        ),
+    [data, search, activeBadges, activeLocations, resourcesOnly, wantedAndCraftableOnly, ownInventoryOnly, meUserId]
   );
   const hasFilters =
-    search.trim().length > 0 ||
-    activeBadges.length > 0 ||
-    activeLocations.length > 0 ||
-    resourcesOnly ||
-    wantedAndCraftableOnly;
+      search.trim().length > 0 ||
+      activeBadges.length > 0 ||
+      activeLocations.length > 0 ||
+      resourcesOnly ||
+    wantedAndCraftableOnly ||
+    ownInventoryOnly;
 
   return (
     <main className="qb-main">
       <h1>Items</h1>
+
+      {inventoryMatches.length > 0 ? (
+        <div
+          style={{
+            border: "1px solid rgba(245, 197, 24, 0.55)",
+            boxShadow: "0 0 0 1px rgba(245, 197, 24, 0.15)",
+            borderRadius: 12,
+            overflow: "hidden"
+          }}
+        >
+          <Card>
+            <h2 className="qb-card-title">Anfragen fuer mein Lager</h2>
+            <div className="qb-grid" style={{ gap: 10 }}>
+              {inventoryMatches.map((match) => (
+                <div key={`${match.requestId}-${match.entryId}`} className="qb-grid" style={{ gap: 6 }}>
+                  <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                    <div>
+                      <strong><a href={`/items/${match.matchedItemId}`}>{match.itemName}</a></strong>
+                      <div className="qb-muted">{match.requesterUsername} sucht {match.requestedQty}x bei {match.locationLabel}</div>
+                      {match.averageQuality ? <div className="qb-muted">Durchschnittsqualitaet: {match.averageQuality}</div> : null}
+                      {match.note ? <div className="qb-muted">{match.note}</div> : null}
+                    </div>
+                    <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <Badge label={`Im Lager ${match.availableQty}`} />
+                      {!match.hasEnoughQty ? <Badge label="Zu wenig Bestand" /> : null}
+                      <Button
+                        type="button"
+                        variant="primary"
+                        disabled={busy || !match.hasEnoughQty}
+                        onClick={() => void fulfillRequestFromMatch(match)}
+                      >
+                        {busy ? "Speichert..." : "Anfrage erfuellen"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      ) : null}
 
       <Card>
         <div className="qb-inline" style={{ justifyContent: "space-between" }}>
@@ -852,6 +985,7 @@ export default function ItemsPage() {
                 setActiveLocations([]);
                 setResourcesOnly(false);
                 setWantedAndCraftableOnly(false);
+                setOwnInventoryOnly(false);
               }}
               style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
             >
@@ -870,6 +1004,13 @@ export default function ItemsPage() {
             onClick={() => setWantedAndCraftableOnly((value) => !value)}
           >
             Gesucht und craftbar
+          </Button>
+          <Button
+            type="button"
+            variant={ownInventoryOnly ? "primary" : "secondary"}
+            onClick={() => setOwnInventoryOnly((value) => !value)}
+          >
+            Eigenes Inventar
           </Button>
         </div>
         <div className="qb-grid" style={{ gap: 10 }}>
@@ -977,7 +1118,7 @@ export default function ItemsPage() {
           }}
         >
           <div>
-            <h2 className="qb-card-title">Gemeinsamer Item-Baum</h2>
+            <h2 className="qb-card-title">Item Liste</h2>
             <p className="qb-muted">Die Liste zeigt die gemeinsame Stammdatenstruktur. Details zu Crafting, Lager und Suche liegen jeweils auf der Detailseite des Items.</p>
           </div>
           {itemEditMode ? <span className="qb-muted">Hier ablegen als Oberpunkt</span> : null}
@@ -1007,189 +1148,215 @@ export default function ItemsPage() {
 
       {(canAdmin || canEdit) ? (
         <Card>
-          <h2 className="qb-card-title">Verwaltung</h2>
-          {canAdmin ? (
+          <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <h2 className="qb-card-title" style={{ margin: 0 }}>Verwaltung</h2>
+            <Button
+              type="button"
+              variant={adminSectionCollapsed ? "secondary" : "primary"}
+              onClick={() => setAdminSectionCollapsed((value) => !value)}
+            >
+              {adminSectionCollapsed ? "Verwaltung anzeigen" : "Verwaltung einklappen"}
+            </Button>
+          </div>
+          {!adminSectionCollapsed ? (
             <>
-              <div className="qb-form">
-                <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                  <strong>Item-Struktur</strong>
-                  <Button
-                    type="button"
-                    variant={itemEditMode ? "primary" : "secondary"}
-                    onClick={() => {
-                      setItemEditMode((value) => !value);
-                      setDraggedItem(null);
-                    }}
-                  >
-                    {itemEditMode ? "Bearbeiten beenden" : "Bearbeiten starten"}
-                  </Button>
-                </div>
-                <p className="qb-muted">Nur Admins duerfen die gemeinsame Item-Struktur per Drag and Drop veraendern.</p>
-              </div>
-              <div className="qb-form">
-                <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                  <strong>Location-Struktur</strong>
-                  <Button
-                    type="button"
-                    variant={locationEditMode ? "primary" : "secondary"}
-                    onClick={() => {
-                      setLocationEditMode((value) => !value);
-                      setDraggedLocation(null);
-                    }}
-                  >
-                    {locationEditMode ? "Bearbeiten beenden" : "Bearbeiten starten"}
-                  </Button>
-                </div>
-                <p className="qb-muted">Drag and Drop hilft dabei, Locations spaeter sauber umzubauen.</p>
-              </div>
-              <div className="qb-form">
-                <strong>Badges</strong>
-                <p className="qb-muted">Badges koennen hier zentral angelegt, gruppiert, umbenannt und geloescht werden.</p>
-                <form className="qb-form" onSubmit={createBadgeDefinition}>
-                  <TextInput placeholder="Badge-Name" value={badgeName} onChange={(e) => setBadgeName(e.target.value)} required />
-                  <TextInput placeholder="Gruppe (optional)" value={badgeGroupName} onChange={(e) => setBadgeGroupName(e.target.value)} />
-                  <Button type="submit" variant="primary" disabled={badgeBusy !== null}>
-                    {badgeBusy === "create" ? "Speichert..." : "Badge anlegen"}
-                  </Button>
-                </form>
-              {groupedBadgeDefinitions.length === 0 ? (
-                  <p className="qb-muted">Noch keine Badges angelegt.</p>
-                ) : groupedBadgeDefinitions.map((group) => (
-                  <div key={group.groupName} className="qb-grid" style={{ gap: 8 }}>
+              {canAdmin ? (
+                <>
+                  <div className="qb-form">
                     <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                      <button
-                        type="button"
-                        className="qb-nav-link"
-                        onClick={() => setCollapsedBadgeGroups((current) => toggleValue(current, group.groupName))}
-                        style={{ textAlign: "left", padding: 0, background: "none", border: "none", cursor: "pointer" }}
-                      >
-                        <strong>{collapsedBadgeGroups.includes(group.groupName) ? "+ " : "- "}{group.groupName}</strong>
-                      </button>
+                      <strong>Item-Struktur</strong>
                       <Button
                         type="button"
-                        variant="danger"
-                        disabled={badgeBusy !== null}
-                        onClick={() => void deleteBadgeGroup(group.groupName)}
+                        variant={itemEditMode ? "primary" : "secondary"}
+                        onClick={() => {
+                          setItemEditMode((value) => !value);
+                          setDraggedItem(null);
+                        }}
                       >
-                        Gruppe loeschen
+                        {itemEditMode ? "Bearbeiten beenden" : "Bearbeiten starten"}
                       </Button>
                     </div>
-                    {!collapsedBadgeGroups.includes(group.groupName) ? group.badges.map((badge) => {
-                      const isEditing = editingBadgeName === badge.name;
-                      return (
-                        <div key={badge.name} className="qb-inline" style={{ justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                          <Badge label={badge.name} />
-                          {isEditing ? (
-                            <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap" }}>
-                              <TextInput value={editBadgeName} onChange={(e) => setEditBadgeName(e.target.value)} placeholder="Badge-Name" />
-                              <TextInput value={editBadgeGroupName} onChange={(e) => setEditBadgeGroupName(e.target.value)} placeholder="Gruppe (optional)" />
-                              <Button type="button" variant="primary" disabled={badgeBusy !== null} onClick={() => void saveBadgeDefinition(badge.name)}>
-                                Speichern
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                disabled={badgeBusy !== null}
-                                onClick={() => {
-                                  setEditingBadgeName(null);
-                                  setEditBadgeName("");
-                                  setEditBadgeGroupName("");
-                                }}
-                              >
-                                Abbrechen
-                              </Button>
-                            </div>
-                          ) : (
-                            <div className="qb-inline" style={{ gap: 8 }}>
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                disabled={badgeBusy !== null}
-                                onClick={() => {
-                                  setEditingBadgeName(badge.name);
-                                  setEditBadgeName(badge.name);
-                                  setEditBadgeGroupName(badge.groupName ?? "");
-                                }}
-                              >
-                                Bearbeiten
-                              </Button>
-                              <Button type="button" variant="danger" disabled={badgeBusy !== null} onClick={() => void deleteBadgeDefinition(badge.name)}>
-                                Loeschen
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    }) : null}
+                    <p className="qb-muted">Nur Admins duerfen die gemeinsame Item-Struktur per Drag and Drop veraendern.</p>
                   </div>
-                ))}
-              </div>
-            </>
-          ) : null}
-
-          {canEdit ? (
-            <form className="qb-form" onSubmit={createLocation}>
-              <strong>Neuen Lagerort anlegen</strong>
-              <SelectInput value={locationParentId} onChange={(e) => setLocationParentId(e.target.value)}>
-                <option value="">Kein Oberpunkt</option>
-                {data?.locationFilters.map((location) => (
-                  <option key={location.id} value={location.id}>{location.label}</option>
-                ))}
-              </SelectInput>
-              <TextInput placeholder="Location-Name" value={locationName} onChange={(e) => setLocationName(e.target.value)} required />
-              <TextArea rows={3} placeholder="Beschreibung" value={locationDescription} onChange={(e) => setLocationDescription(e.target.value)} />
-              <Button type="submit" variant="primary" disabled={busy}>
-                {busy ? "Speichert..." : "Location anlegen"}
-              </Button>
-            </form>
-          ) : null}
-        </Card>
-      ) : null}
-
-      {canAdmin ? (
-        <Card>
-          <h2 className="qb-card-title">SCMDB Import</h2>
-          <div className="qb-form">
-            <TextInput
-              placeholder="https://scmdb.net/?page=fab"
-              value={scmdbSourceURL}
-              onChange={(e) => setScmdbSourceURL(e.target.value)}
-            />
-            <div className="qb-inline">
-              <Button type="button" variant="secondary" disabled={importBusy} onClick={() => void runSCMDBImport(true)}>
-                {importBusy ? "Laeuft..." : "Preview laden"}
-              </Button>
-              <Button type="button" variant="primary" disabled={importBusy} onClick={() => void runSCMDBImport(false)}>
-                {importBusy ? "Import laeuft..." : "Von SCMDB importieren"}
-              </Button>
-            </div>
-            {importError ? <p className="qb-error">{importError}</p> : null}
-            {importResult ? (
-              <div className="qb-form" style={{ gap: 8 }}>
-                <p className="qb-muted">
-                  Quelle {importResult.sourceBaseURL}, Version {importResult.version}, gefunden {importResult.totalDiscovered}.
-                </p>
-                <p className="qb-muted">
-                  Eingefuegt {importResult.inserted}, uebersprungen {importResult.skipped}.
-                </p>
-                <div className="qb-inline">
-                  {Object.entries(importResult.sectionCounts).map(([section, count]) => (
-                    <Badge key={section} label={`${section} ${count}`} />
-                  ))}
-                </div>
-                {importResult.preview.length > 0 ? (
-                  <div className="qb-grid" style={{ gap: 6 }}>
-                    <strong>Preview</strong>
-                    {importResult.preview.map((item) => (
-                      <div key={`${item.section}-${item.name}`} className="qb-muted">
-                        {item.section}: {item.name}
+                  <div className="qb-form">
+                    <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                      <strong>Location-Struktur</strong>
+                      <Button
+                        type="button"
+                        variant={locationEditMode ? "primary" : "secondary"}
+                        onClick={() => {
+                          setLocationEditMode((value) => !value);
+                          setDraggedLocation(null);
+                        }}
+                      >
+                        {locationEditMode ? "Bearbeiten beenden" : "Bearbeiten starten"}
+                      </Button>
+                    </div>
+                    <p className="qb-muted">Drag and Drop hilft dabei, Locations spaeter sauber umzubauen.</p>
+                  </div>
+                  <div className="qb-form">
+                    <strong>Badges</strong>
+                    <p className="qb-muted">Badges koennen hier zentral angelegt, gruppiert, umbenannt und geloescht werden.</p>
+                    <form className="qb-form" onSubmit={createBadgeDefinition}>
+                      <TextInput placeholder="Badge-Name" value={badgeName} onChange={(e) => setBadgeName(e.target.value)} required />
+                      <TextInput placeholder="Gruppe (optional)" value={badgeGroupName} onChange={(e) => setBadgeGroupName(e.target.value)} />
+                      <Button type="submit" variant="primary" disabled={badgeBusy !== null}>
+                        {badgeBusy === "create" ? "Speichert..." : "Badge anlegen"}
+                      </Button>
+                    </form>
+                    {groupedBadgeDefinitions.length === 0 ? (
+                      <p className="qb-muted">Noch keine Badges angelegt.</p>
+                    ) : groupedBadgeDefinitions.map((group) => (
+                      <div key={group.groupName} className="qb-grid" style={{ gap: 8 }}>
+                        <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className="qb-nav-link"
+                            onClick={() => setCollapsedBadgeGroups((current) => toggleValue(current, group.groupName))}
+                            style={{ textAlign: "left", padding: 0, background: "none", border: "none", cursor: "pointer" }}
+                          >
+                            <strong>{collapsedBadgeGroups.includes(group.groupName) ? "+ " : "- "}{group.groupName}</strong>
+                          </button>
+                          <Button
+                            type="button"
+                            variant="danger"
+                            disabled={badgeBusy !== null}
+                            onClick={() => void deleteBadgeGroup(group.groupName)}
+                          >
+                            Gruppe loeschen
+                          </Button>
+                        </div>
+                        {!collapsedBadgeGroups.includes(group.groupName) ? group.badges.map((badge) => {
+                          const isEditing = editingBadgeName === badge.name;
+                          return (
+                            <div key={badge.name} className="qb-inline" style={{ justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                              <Badge label={badge.name} />
+                              {isEditing ? (
+                                <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap" }}>
+                                  <TextInput value={editBadgeName} onChange={(e) => setEditBadgeName(e.target.value)} placeholder="Badge-Name" />
+                                  <TextInput value={editBadgeGroupName} onChange={(e) => setEditBadgeGroupName(e.target.value)} placeholder="Gruppe (optional)" />
+                                  <Button type="button" variant="primary" disabled={badgeBusy !== null} onClick={() => void saveBadgeDefinition(badge.name)}>
+                                    Speichern
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="secondary"
+                                    disabled={badgeBusy !== null}
+                                    onClick={() => {
+                                      setEditingBadgeName(null);
+                                      setEditBadgeName("");
+                                      setEditBadgeGroupName("");
+                                    }}
+                                  >
+                                    Abbrechen
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="qb-inline" style={{ gap: 8 }}>
+                                  <Button
+                                    type="button"
+                                    variant="secondary"
+                                    disabled={badgeBusy !== null}
+                                    onClick={() => {
+                                      setEditingBadgeName(badge.name);
+                                      setEditBadgeName(badge.name);
+                                      setEditBadgeGroupName(badge.groupName ?? "");
+                                    }}
+                                  >
+                                    Bearbeiten
+                                  </Button>
+                                  <Button type="button" variant="danger" disabled={badgeBusy !== null} onClick={() => void deleteBadgeDefinition(badge.name)}>
+                                    Loeschen
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }) : null}
                       </div>
                     ))}
                   </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
+                  <div className="qb-form">
+                    <strong>SCMDB Import</strong>
+                    <TextInput
+                      placeholder="https://scmdb.net/?page=fab"
+                      value={scmdbSourceURL}
+                      onChange={(e) => setScmdbSourceURL(e.target.value)}
+                    />
+                    <div className="qb-inline">
+                      <Button type="button" variant="secondary" disabled={importBusy} onClick={() => void runSCMDBImport(true)}>
+                        {importBusy ? "Laeuft..." : "Preview laden"}
+                      </Button>
+                      <Button type="button" variant="primary" disabled={importBusy} onClick={() => void runSCMDBImport(false)}>
+                        {importBusy ? "Import laeuft..." : "Von SCMDB importieren"}
+                      </Button>
+                    </div>
+                    {importError ? <p className="qb-error">{importError}</p> : null}
+                    {importResult ? (
+                      <div className="qb-form" style={{ gap: 8 }}>
+                        <p className="qb-muted">
+                          Quelle {importResult.sourceBaseURL}, Version {importResult.version}, gefunden {importResult.totalDiscovered}.
+                        </p>
+                        <p className="qb-muted">
+                          Eingefuegt {importResult.inserted}, uebersprungen {importResult.skipped}.
+                        </p>
+                        <div className="qb-inline">
+                          {Object.entries(importResult.sectionCounts).map(([section, count]) => (
+                            <Badge key={section} label={`${section} ${count}`} />
+                          ))}
+                        </div>
+                        {importResult.preview.length > 0 ? (
+                          <div className="qb-grid" style={{ gap: 6 }}>
+                            <strong>Preview</strong>
+                            {importResult.preview.map((item) => (
+                              <div key={`${item.section}-${item.name}`} className="qb-muted">
+                                {item.section}: {item.name}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+
+              {canEdit ? (
+                <form className="qb-form" onSubmit={createLocation}>
+                  <strong>Neuen Lagerort anlegen</strong>
+                  <SelectInput value={locationParentId} onChange={(e) => setLocationParentId(e.target.value)}>
+                    <option value="">Kein Oberpunkt</option>
+                    {data?.locationFilters.map((location) => (
+                      <option key={location.id} value={location.id}>{location.label}</option>
+                    ))}
+                  </SelectInput>
+                  <TextInput placeholder="Location-Name" value={locationName} onChange={(e) => setLocationName(e.target.value)} required />
+                  <TextArea rows={3} placeholder="Beschreibung" value={locationDescription} onChange={(e) => setLocationDescription(e.target.value)} />
+                  <Button type="submit" variant="primary" disabled={busy}>
+                    {busy ? "Speichert..." : "Location anlegen"}
+                  </Button>
+                </form>
+              ) : null}
+
+              {canEdit ? (
+                <form className="qb-form" onSubmit={moveOwnInventoryToLocation}>
+                  <strong>Eigenes Inventar verschieben</strong>
+                  <SelectInput value={moveOwnInventoryLocationId} onChange={(e) => setMoveOwnInventoryLocationId(e.target.value)}>
+                    <option value="">Ziel-Location waehlen</option>
+                    {data?.locationFilters.map((location) => (
+                      <option key={location.id} value={location.id}>{location.label}</option>
+                    ))}
+                  </SelectInput>
+                  <p className="qb-muted">
+                    Alle eigenen Lager-Eintraege werden zur Ziel-Location verschoben. Gleiche Items werden dort zusammengelegt und die Mengen addiert.
+                  </p>
+                  <Button type="submit" variant="secondary" disabled={busy || !moveOwnInventoryLocationId}>
+                    {busy ? "Verschiebt..." : "Eigenes Inventar verschieben"}
+                  </Button>
+                </form>
+              ) : null}
+            </>
+          ) : null}
         </Card>
       ) : null}
 

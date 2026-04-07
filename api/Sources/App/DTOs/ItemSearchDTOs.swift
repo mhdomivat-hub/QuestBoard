@@ -1,12 +1,17 @@
 import Vapor
 
 struct ItemSearchRequestCreateDTO: Content {
+    let qty: Int?
     let averageQuality: String?
     let note: String?
 }
 
 struct ItemSearchRequestStatusUpdateDTO: Content {
     let status: ItemSearchRequestStatus
+}
+
+struct ItemSearchRequestResourcesUpdateDTO: Content {
+    let hasResources: Bool
 }
 
 struct ItemSearchOfferCreateDTO: Content {
@@ -27,11 +32,37 @@ struct ItemSearchRequestResponseDTO: Content {
     let id: UUID
     let userId: UUID
     let username: String
+    let qty: Int
     let averageQuality: String?
     let note: String?
+    let hasResources: Bool
     let status: ItemSearchRequestStatus
     let createdAt: Date?
     let offers: [ItemSearchOfferResponseDTO]
+}
+
+struct FulfillItemSearchRequestFromEntryDTO: Content {
+    let entryId: UUID
+}
+
+struct InventoryMatchResponseDTO: Content {
+    let requestId: UUID
+    let itemId: UUID
+    let matchedItemId: UUID
+    let itemName: String
+    let requesterUserId: UUID
+    let requesterUsername: String
+    let entryId: UUID
+    let entryOwnerUserId: UUID
+    let entryOwnerUsername: String
+    let locationId: UUID
+    let locationLabel: String
+    let requestedQty: Int
+    let availableQty: Int
+    let averageQuality: String?
+    let note: String?
+    let hasEnoughQty: Bool
+    let createdAt: Date?
 }
 
 struct ItemSearchTreeNodeDTO: Content {

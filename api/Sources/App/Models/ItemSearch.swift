@@ -19,11 +19,17 @@ final class ItemSearchRequest: Model, Content, @unchecked Sendable {
     @Parent(key: "user_id")
     var user: User
 
+    @Field(key: "qty")
+    var qty: Int
+
     @OptionalField(key: "average_quality")
     var averageQuality: String?
 
     @OptionalField(key: "note")
     var note: String?
+
+    @Field(key: "has_resources")
+    var hasResources: Bool
 
     @Enum(key: "status")
     var status: ItemSearchRequestStatus
@@ -40,15 +46,19 @@ final class ItemSearchRequest: Model, Content, @unchecked Sendable {
         id: UUID? = nil,
         itemID: UUID,
         userID: UUID,
+        qty: Int = 1,
         averageQuality: String? = nil,
         note: String? = nil,
+        hasResources: Bool = false,
         status: ItemSearchRequestStatus = .open
     ) {
         self.id = id
         self.$item.id = itemID
         self.$user.id = userID
+        self.qty = qty
         self.averageQuality = averageQuality
         self.note = note
+        self.hasResources = hasResources
         self.status = status
     }
 }
@@ -117,6 +127,34 @@ struct CreateItemSearchRequest: AsyncMigration {
     func revert(on database: Database) async throws {
         try await database.schema(ItemSearchRequest.schema).delete()
         try await database.enum("item_search_request_status").delete()
+    }
+}
+
+struct AddItemSearchRequestQtyField: AsyncMigration {
+    func prepare(on database: Database) async throws {
+        try await database.schema(ItemSearchRequest.schema)
+            .field("qty", .int, .required, .sql(.default(1)))
+            .update()
+    }
+
+    func revert(on database: Database) async throws {
+        try await database.schema(ItemSearchRequest.schema)
+            .deleteField("qty")
+            .update()
+    }
+}
+
+struct AddItemSearchRequestHasResources: AsyncMigration {
+    func prepare(on database: Database) async throws {
+        try await database.schema(ItemSearchRequest.schema)
+            .field("has_resources", .bool, .required, .sql(.default(false)))
+            .update()
+    }
+
+    func revert(on database: Database) async throws {
+        try await database.schema(ItemSearchRequest.schema)
+            .deleteField("has_resources")
+            .update()
     }
 }
 

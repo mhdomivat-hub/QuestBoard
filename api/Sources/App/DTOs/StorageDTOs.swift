@@ -69,6 +69,16 @@ struct StorageEntryUpdateDTO: Content {
     let note: String?
 }
 
+struct MoveOwnStorageEntriesDTO: Content {
+    let locationId: UUID
+}
+
+struct MoveOwnStorageEntriesResponseDTO: Content {
+    let locationId: UUID
+    let movedEntries: Int
+    let mergedItems: Int
+}
+
 struct StoragePersonDTO: Content {
     let userId: UUID
     let username: String

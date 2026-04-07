@@ -51,14 +51,35 @@ type SearchRequest = {
   id: string;
   userId: string;
   username: string;
+  qty: number;
   averageQuality?: string | null;
   note?: string | null;
+  hasResources: boolean;
   status: "OPEN" | "FULFILLED" | "CANCELLED";
   offers: SearchOffer[];
 };
 type ItemSearchDetail = {
   id: string;
   requests: SearchRequest[];
+};
+type InventoryMatch = {
+  requestId: string;
+  itemId: string;
+  matchedItemId: string;
+  itemName: string;
+  requesterUserId: string;
+  requesterUsername: string;
+  entryId: string;
+  entryOwnerUserId: string;
+  entryOwnerUsername: string;
+  locationId: string;
+  locationLabel: string;
+  requestedQty: number;
+  availableQty: number;
+  averageQuality?: string | null;
+  note?: string | null;
+  hasEnoughQty: boolean;
+  createdAt?: string | null;
 };
 type TreeNode = { id: string; name: string; children: TreeNode[] };
 type ListResponse = { items: TreeNode[] };
@@ -189,6 +210,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
   const [storageDetail, setStorageDetail] = useState<StorageDetail | null>(null);
   const [blueprintDetail, setBlueprintDetail] = useState<BlueprintDetail | null>(null);
   const [searchDetail, setSearchDetail] = useState<ItemSearchDetail | null>(null);
+  const [inventoryMatches, setInventoryMatches] = useState<InventoryMatch[]>([]);
   const [role, setRole] = useState<UserRole | null>(null);
   const [meUserId, setMeUserId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -213,13 +235,14 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
   const [entryUserId, setEntryUserId] = useState("");
 
   const [averageQuality, setAverageQuality] = useState("");
+  const [requestQty, setRequestQty] = useState(1);
   const [requestNote, setRequestNote] = useState("");
   const [offerNotes, setOfferNotes] = useState<Record<string, string>>({});
-  const [offerHasResources, setOfferHasResources] = useState<Record<string, boolean>>({});
 
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [editingEntryQty, setEditingEntryQty] = useState(1);
   const [editingEntryNote, setEditingEntryNote] = useState("");
+  const [targetedRequestEntryId, setTargetedRequestEntryId] = useState<string | null>(null);
 
   const [allItems, setAllItems] = useState<Array<{ id: string; name: string }>>([]);
   const [mergeTargetId, setMergeTargetId] = useState("");
@@ -240,13 +263,14 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
       fetch("/api/me", { cache: "no-store" }),
       fetch(`/api/storage/items/${params.id}`, { cache: "no-store" }),
       fetch(`/api/blueprints/${params.id}`, { cache: "no-store" }),
-      fetch(`/api/item-search/${params.id}`, { cache: "no-store" })
+      fetch(`/api/item-search/${params.id}`, { cache: "no-store" }),
+      fetch("/api/item-search/matches/mine", { cache: "no-store" })
     ];
     if (canAdmin) {
       requests.push(fetch("/api/storage/items", { cache: "no-store" }));
     }
 
-    const [meRes, storageRes, blueprintRes, searchRes, listRes] = await Promise.all(requests);
+    const [meRes, storageRes, blueprintRes, searchRes, matchRes, listRes] = await Promise.all(requests);
 
     if (meRes.ok) {
       const me = await meRes.json();
@@ -255,18 +279,20 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
       setEntryUserId((me.userId as string | undefined) ?? "");
     }
 
-    if (!storageRes.ok || !blueprintRes.ok || !searchRes.ok) {
-      setError(`Item load failed (${storageRes.status}/${blueprintRes.status}/${searchRes.status})`);
+    if (!storageRes.ok || !blueprintRes.ok || !searchRes.ok || !matchRes.ok) {
+      setError(`Item load failed (${storageRes.status}/${blueprintRes.status}/${searchRes.status}/${matchRes.status})`);
       return;
     }
 
     const storageBody = (await storageRes.json()) as StorageDetail;
     const blueprintBody = (await blueprintRes.json()) as BlueprintDetail;
     const searchBody = (await searchRes.json()) as ItemSearchDetail;
+    const matchBody = (await matchRes.json()) as InventoryMatch[];
 
     setStorageDetail(storageBody);
     setBlueprintDetail(blueprintBody);
     setSearchDetail(searchBody);
+    setInventoryMatches(matchBody.filter((match) => match.matchedItemId === params.id));
     setName(storageBody.name);
     setDescription(storageBody.description ?? "");
     setItemCode(storageBody.itemCode ?? "");
@@ -445,6 +471,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          qty: requestQty,
           averageQuality: averageQuality || null,
           note: requestNote || null
         })
@@ -456,11 +483,66 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
         return;
       }
 
+      setRequestQty(1);
       setAverageQuality("");
       setRequestNote("");
       await loadAll();
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function fulfillRequestFromMatch(match: InventoryMatch) {
+    if (!window.confirm(`Anfrage von ${match.requesterUsername} ueber ${match.requestedQty}x ${match.itemName} erfuellen?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/item-search/requests/${match.requestId}/fulfill-from-entry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entryId: match.entryId })
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setError(`Anfrage erfuellen fehlgeschlagen (${res.status}) ${text}`);
+        return;
+      }
+      await loadAll();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createTargetedRequest(entry: Entry) {
+    if (!storageDetail) return;
+    setBusy(true);
+    setTargetedRequestEntryId(entry.id);
+    setError(null);
+    try {
+      const targetedNoteParts = [
+        `Gezielte Anfrage fuer ${entry.username} bei ${entry.locationLabel}.`,
+        entry.note ? `Eintragsnotiz: ${entry.note}` : null
+      ].filter(Boolean);
+
+      const res = await fetch(`/api/item-search/${params.id}/requests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          averageQuality: null,
+          note: targetedNoteParts.join(" ")
+        })
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setError(`Gezielte Anfrage fehlgeschlagen (${res.status}) ${text}`);
+        return;
+      }
+
+      await loadAll();
+    } finally {
+      setBusy(false);
+      setTargetedRequestEntryId(null);
     }
   }
 
@@ -472,8 +554,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          note: offerNotes[requestId] || null,
-          hasResources: offerHasResources[requestId] ?? false
+          note: offerNotes[requestId] || null
         })
       });
       if (!res.ok) {
@@ -482,7 +563,26 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
         return;
       }
       setOfferNotes((current) => ({ ...current, [requestId]: "" }));
-      setOfferHasResources((current) => ({ ...current, [requestId]: false }));
+      await loadAll();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateRequestResources(requestId: string, hasResources: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/item-search/requests/${requestId}/resources`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hasResources })
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setError(`Ressourcenstatus speichern fehlgeschlagen (${res.status}) ${text}`);
+        return;
+      }
       await loadAll();
     } finally {
       setBusy(false);
@@ -592,6 +692,38 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
       ) : null}
 
       {error ? <p className="qb-error">{error}</p> : null}
+
+      {inventoryMatches.length > 0 ? (
+        <Card>
+          <h2 className="qb-card-title">Anfragen fuer mein Lager</h2>
+          <div className="qb-grid" style={{ gap: 10 }}>
+            {inventoryMatches.map((match) => (
+              <div key={`${match.requestId}-${match.entryId}`} className="qb-grid" style={{ gap: 6 }}>
+                <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                  <div>
+                    <strong>{match.requesterUsername} sucht {match.requestedQty}x</strong>
+                    <div className="qb-muted">{match.itemName} bei {match.locationLabel}</div>
+                    {match.averageQuality ? <div className="qb-muted">Durchschnittsqualitaet: {match.averageQuality}</div> : null}
+                    {match.note ? <div className="qb-muted">{match.note}</div> : null}
+                  </div>
+                  <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <Badge label={`Im Lager ${match.availableQty}`} />
+                    {!match.hasEnoughQty ? <Badge label="Zu wenig Bestand" /> : null}
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={busy || !match.hasEnoughQty}
+                      onClick={() => void fulfillRequestFromMatch(match)}
+                    >
+                      {busy ? "Speichert..." : "Anfrage erfuellen"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       <Card>
         <div className="qb-inline" style={{ justifyContent: "space-between" }}>
@@ -717,23 +849,35 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                     </div>
                   </div>
                 ) : entry.note ? <div className="qb-muted">{entry.note}</div> : null}
-                {(canAdmin || entry.userId === meUserId) ? (
-                  <div className="qb-inline">
+                <div className="qb-inline">
+                  {(canAdmin || entry.userId === meUserId) ? (
+                    <>
+                      <Button
+                        type="button"
+                        variant={editingEntryId === entry.id ? "primary" : "secondary"}
+                        onClick={() => {
+                          setEditingEntryId(entry.id);
+                          setEditingEntryQty(entry.qty);
+                          setEditingEntryNote(entry.note ?? "");
+                        }}
+                        disabled={busy}
+                      >
+                        Menge aendern
+                      </Button>
+                      <Button type="button" variant="danger" onClick={() => void deleteEntry(entry.id)} disabled={busy}>Eintrag loeschen</Button>
+                    </>
+                  ) : null}
+                  {canEdit && entry.userId !== meUserId ? (
                     <Button
                       type="button"
-                      variant={editingEntryId === entry.id ? "primary" : "secondary"}
-                      onClick={() => {
-                        setEditingEntryId(entry.id);
-                        setEditingEntryQty(entry.qty);
-                        setEditingEntryNote(entry.note ?? "");
-                      }}
+                      variant="secondary"
+                      onClick={() => void createTargetedRequest(entry)}
                       disabled={busy}
                     >
-                      Menge aendern
+                      {targetedRequestEntryId === entry.id ? "Erstellt..." : "Anfrage erstellen"}
                     </Button>
-                    <Button type="button" variant="danger" onClick={() => void deleteEntry(entry.id)} disabled={busy}>Eintrag loeschen</Button>
-                  </div>
-                ) : null}
+                  ) : null}
+                </div>
               </Card>
             ))}
           </div>
@@ -763,16 +907,19 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
         ) : (
           <div className="qb-grid">
             {searchDetail.requests.map((request) => {
-              const alreadyOffered = request.offers.some((offer) => offer.userId === meUserId);
-              const canOffer = canEdit && request.userId !== meUserId && request.status === "OPEN" && !alreadyOffered;
+              const canOffer = canEdit && request.userId !== meUserId && request.status === "OPEN";
               const canManageRequest = canAdmin || request.userId === meUserId;
 
               return (
                 <Card key={request.id}>
                   <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12 }}>
                     <strong>{request.username}</strong>
-                    <Badge label={request.status === "OPEN" ? "Offen" : request.status === "FULFILLED" ? "Erfuellt" : "Abgebrochen"} />
+                    <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      {request.hasResources ? <Badge label="Ressourcen vorhanden" /> : null}
+                      <Badge label={request.status === "OPEN" ? "Offen" : request.status === "FULFILLED" ? "Erfuellt" : "Abgebrochen"} />
+                    </div>
                   </div>
+                  <div className="qb-muted">Menge: {request.qty}</div>
                   {request.averageQuality ? <div className="qb-muted">Durchschnittsqualitaet: {request.averageQuality}</div> : null}
                   {request.note ? <div className="qb-muted">{request.note}</div> : null}
                   <div className="qb-grid" style={{ gap: 8, marginTop: 8 }}>
@@ -784,7 +931,6 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                         <div key={offer.id}>
                           <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12 }}>
                             <span>{offer.username}</span>
-                            {offer.hasResources ? <Badge label="Ressourcen vorhanden" /> : null}
                           </div>
                           {offer.note ? <div className="qb-muted">{offer.note}</div> : null}
                         </div>
@@ -793,14 +939,6 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                   </div>
                   {canOffer ? (
                     <div className="qb-form" style={{ marginTop: 8 }}>
-                      <label className="qb-inline" style={{ gap: 8, alignItems: "center" }}>
-                        <input
-                          type="checkbox"
-                          checked={offerHasResources[request.id] ?? false}
-                          onChange={(e) => setOfferHasResources((current) => ({ ...current, [request.id]: e.target.checked }))}
-                        />
-                        <span>Ich habe die Ressourcen dafuer</span>
-                      </label>
                       <TextArea
                         rows={2}
                         placeholder="Was kannst du bereitstellen? (optional)"
@@ -814,6 +952,16 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                   ) : null}
                   {canManageRequest ? (
                     <div className="qb-inline" style={{ marginTop: 8 }}>
+                      {request.status === "OPEN" && !request.hasResources ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={busy}
+                          onClick={() => void updateRequestResources(request.id, true)}
+                        >
+                          Ich habe die Ressourcen dafuer
+                        </Button>
+                      ) : null}
                       {request.status === "OPEN" ? (
                         <>
                           <Button
@@ -846,6 +994,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
         )}
         {canEdit ? (
           <form className="qb-form" onSubmit={createRequest}>
+            <TextInput type="number" min={1} value={requestQty} onChange={(e) => setRequestQty(Number(e.target.value))} required />
             <TextInput placeholder="Average Quality / Durchschnittsqualitaet (optional)" value={averageQuality} onChange={(e) => setAverageQuality(e.target.value)} />
             <TextArea rows={3} placeholder="Notiz (optional)" value={requestNote} onChange={(e) => setRequestNote(e.target.value)} />
             <Button type="submit" variant="primary" disabled={busy}>{busy ? "Speichert..." : "Suche speichern"}</Button>

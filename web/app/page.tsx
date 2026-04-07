@@ -65,6 +65,19 @@ type StorageListResponse = {
   items: StorageNode[];
 };
 
+type InventoryMatch = {
+  requestId: string;
+  itemId: string;
+  itemName: string;
+  requesterUsername: string;
+  locationLabel: string;
+  requestedQty: number;
+  availableQty: number;
+  hasEnoughQty: boolean;
+  averageQuality?: string | null;
+  note?: string | null;
+};
+
 function flattenBlueprints(nodes: BlueprintNode[]): BlueprintNode[] {
   return nodes.flatMap((node) => [node, ...flattenBlueprints(node.children)]);
 }
@@ -79,6 +92,7 @@ export default function HomePage() {
   const [questProgress, setQuestProgress] = useState<Record<string, QuestProgress>>({});
   const [blueprints, setBlueprints] = useState<BlueprintNode[]>([]);
   const [storageItems, setStorageItems] = useState<StorageNode[]>([]);
+  const [inventoryMatches, setInventoryMatches] = useState<InventoryMatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,11 +101,12 @@ export default function HomePage() {
       setLoading(true);
       setError(null);
       try {
-        const [meRes, questRes, blueprintRes, storageRes] = await Promise.all([
+        const [meRes, questRes, blueprintRes, storageRes, matchRes] = await Promise.all([
           fetch("/api/me", { cache: "no-store" }),
           fetch("/api/quests", { cache: "no-store" }),
           fetch("/api/blueprints", { cache: "no-store" }),
-          fetch("/api/storage/items", { cache: "no-store" })
+          fetch("/api/storage/items", { cache: "no-store" }),
+          fetch("/api/item-search/matches/mine", { cache: "no-store" })
         ]);
 
         if (!meRes.ok) {
@@ -110,12 +125,17 @@ export default function HomePage() {
           setError(`Storage load failed (${storageRes.status})`);
           return;
         }
+        if (!matchRes.ok) {
+          setError(`Inventory matches load failed (${matchRes.status})`);
+          return;
+        }
 
         setMe((await meRes.json()) as MeResponse);
         const questData = (await questRes.json()) as Quest[];
         setQuests(questData);
         setBlueprints(((await blueprintRes.json()) as BlueprintListResponse).blueprints ?? []);
         setStorageItems(((await storageRes.json()) as StorageListResponse).items ?? []);
+        setInventoryMatches((await matchRes.json()) as InventoryMatch[]);
 
         const progressEntries = await Promise.all(
           questData.map(async (quest) => {
@@ -219,6 +239,41 @@ export default function HomePage() {
               <Badge label={me?.role ?? "member"} />
             </div>
           </Card>
+
+          {inventoryMatches.length > 0 ? (
+            <div
+              style={{
+                border: "1px solid rgba(245, 197, 24, 0.55)",
+                boxShadow: "0 0 0 1px rgba(245, 197, 24, 0.15)",
+                borderRadius: 12,
+                overflow: "hidden"
+              }}
+            >
+              <Card>
+                <div className="qb-inline" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                  <h3 className="qb-card-title">Anfragen fuer mein Lager</h3>
+                  <Badge label={`${inventoryMatches.length} offen`} />
+                </div>
+                <div className="qb-grid">
+                  {inventoryMatches.slice(0, 6).map((match) => (
+                    <div key={`${match.requestId}-${match.itemId}`} className="qb-inline" style={{ justifyContent: "space-between", gap: 12 }}>
+                      <div>
+                        <strong><a href={`/items/${match.itemId}`}>{match.itemName}</a></strong>
+                        <div className="qb-muted" style={{ fontSize: 12 }}>
+                          {match.requesterUsername} sucht {match.requestedQty}x bei {match.locationLabel}
+                        </div>
+                        {match.note ? <div className="qb-muted" style={{ fontSize: 12 }}>{match.note}</div> : null}
+                      </div>
+                      <div className="qb-inline" style={{ gap: 8 }}>
+                        <Badge label={`Im Lager ${match.availableQty}`} />
+                        {!match.hasEnoughQty ? <Badge label="Zu wenig Bestand" /> : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </div>
+          ) : null}
 
           <Card>
             <h3 className="qb-card-title">Neueste Quests</h3>
