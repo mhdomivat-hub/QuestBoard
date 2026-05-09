@@ -17,6 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {children}
           <footer className="qb-footer">
             <a className="qb-footer-link" href="/datenschutz">Datenschutz</a>
+            <a className="qb-footer-link" href="/nutzungsbedingungen">Nutzungsbedingungen</a>
             <a className="qb-footer-link" href="/impressum">Impressum</a>
           </footer>
         </div>

@@ -1,0 +1,12 @@
+{
+  "name": "questboard-discord-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.20.0"
+  }
+}
