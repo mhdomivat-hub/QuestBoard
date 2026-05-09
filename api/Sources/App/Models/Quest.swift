@@ -1,5 +1,6 @@
 import Vapor
 import Fluent
+import SQLKit
 
 final class Quest: Model, Content, @unchecked Sendable {
     static let schema = "quests"
@@ -33,6 +34,9 @@ final class Quest: Model, Content, @unchecked Sendable {
     @Field(key: "status")
     var status: String
 
+    @Field(key: "is_prioritized")
+    var isPrioritized: Bool
+
     @OptionalField(key: "terminal_since_at")
     var terminalSinceAt: Date?
 
@@ -44,12 +48,20 @@ final class Quest: Model, Content, @unchecked Sendable {
 
     init() {}
 
-    init(id: UUID? = nil, title: String, description: String, handoverInfo: String? = nil, status: String = Status.open.rawValue) {
+    init(
+        id: UUID? = nil,
+        title: String,
+        description: String,
+        handoverInfo: String? = nil,
+        status: String = Status.open.rawValue,
+        isPrioritized: Bool = false
+    ) {
         self.id = id
         self.title = title
         self.description = description
         self.handoverInfo = handoverInfo
         self.status = status
+        self.isPrioritized = isPrioritized
     }
 }
 
@@ -60,6 +72,7 @@ struct CreateQuest: AsyncMigration {
             .field("title", .string, .required)
             .field("description", .string, .required)
             .field("status", .string, .required)
+            .field("is_prioritized", .bool, .required, .sql(.default(false)))
             .field("created_at", .datetime)
             .create()
     }
@@ -116,5 +129,27 @@ struct AddQuestHandoverInfoField: AsyncMigration {
         try await database.schema(Quest.schema)
             .deleteField("handover_info")
             .update()
+    }
+}
+
+struct AddQuestPriorityField: AsyncMigration {
+    func prepare(on database: Database) async throws {
+        guard let sql = database as? SQLDatabase else {
+            throw Abort(.internalServerError, reason: "SQL database unavailable")
+        }
+        try await sql.raw("""
+            ALTER TABLE quests
+            ADD COLUMN IF NOT EXISTS is_prioritized BOOLEAN NOT NULL DEFAULT FALSE
+            """).run()
+    }
+
+    func revert(on database: Database) async throws {
+        guard let sql = database as? SQLDatabase else {
+            throw Abort(.internalServerError, reason: "SQL database unavailable")
+        }
+        try await sql.raw("""
+            ALTER TABLE quests
+            DROP COLUMN IF EXISTS is_prioritized
+            """).run()
     }
 }

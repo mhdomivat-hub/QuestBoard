@@ -5,6 +5,7 @@ struct QuestCreateDTO: Content {
     let description: String
     let handoverInfo: String?
     let status: String?
+    let isPrioritized: Bool?
 }
 
 struct QuestStatusUpdateDTO: Content {
@@ -15,6 +16,7 @@ struct QuestUpdateDTO: Content {
     let title: String
     let description: String
     let handoverInfo: String?
+    let isPrioritized: Bool?
 }
 
 struct QuestRetentionCleanupRequestDTO: Content {
@@ -41,4 +43,5 @@ struct QuestResponseDTO: Content {
     let createdByUsername: String?
     let isApproved: Bool
     let approvedAt: Date?
+    let isPrioritized: Bool
 }

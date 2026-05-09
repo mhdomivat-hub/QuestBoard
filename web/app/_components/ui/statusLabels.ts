@@ -9,6 +9,7 @@ export const STATUS_LABELS: Record<string, string> = {
   CANCELLED: "Abgebrochen",
   PENDING: "Ausstehend",
   APPROVED: "Freigegeben",
+  PRIORITAET: "Priorisiert",
   COMPLETED: "Abgeschlossen",
   REJECTED: "Abgelehnt",
   member: "Mitglied",

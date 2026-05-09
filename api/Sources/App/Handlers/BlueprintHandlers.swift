@@ -21,6 +21,12 @@ private func requireBlueprintBadgeAdmin(_ user: User) throws {
     }
 }
 
+private func requireBlueprintAdmin(_ user: User) throws {
+    guard user.role == .admin || user.role == .superAdmin else {
+        throw Abort(.forbidden, reason: "Only admins may manage top-level blueprints")
+    }
+}
+
 private func sanitizeBlueprintName(_ value: String) throws -> String {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
@@ -35,6 +41,16 @@ private func sanitizeBlueprintName(_ value: String) throws -> String {
 private func sanitizeBlueprintDescription(_ value: String?) -> String? {
     let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return trimmed.isEmpty ? nil : trimmed
+}
+
+private func sanitizeBlueprintItemCode(_ value: String?) -> String? {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !trimmed.isEmpty else { return nil }
+    return String(trimmed.prefix(160))
+}
+
+private func sanitizeHideFromBlueprints(_ value: Bool?) -> Bool {
+    value ?? false
 }
 
 private func sanitizeBlueprintBadges(_ values: [String]?) -> [String] {
@@ -113,6 +129,38 @@ private func buildCrafterMap(
     return result
 }
 
+private func buildBlueprintActivityMap(
+    blueprints: [Blueprint],
+    assignments: [BlueprintCrafter],
+    storageEntries: [StorageEntry]
+) -> [UUID: Date] {
+    var result: [UUID: Date] = [:]
+
+    func register(_ date: Date?, for blueprintId: UUID) {
+        guard let date else { return }
+        if let existing = result[blueprintId], existing >= date {
+            return
+        }
+        result[blueprintId] = date
+    }
+
+    for blueprint in blueprints {
+        guard let blueprintId = blueprint.id else { continue }
+        register(blueprint.createdAt, for: blueprintId)
+        register(blueprint.updatedAt, for: blueprintId)
+    }
+
+    for assignment in assignments {
+        register(assignment.createdAt, for: assignment.$blueprint.id)
+    }
+
+    for entry in storageEntries {
+        register(entry.createdAt, for: entry.$item.id)
+    }
+
+    return result
+}
+
 private func collectAvailableBadges(_ blueprints: [Blueprint]) -> [String] {
     var seen: Set<String> = []
     var result: [String] = []
@@ -170,24 +218,35 @@ private func updateBlueprintSubtreeCategory(rootId: UUID, category: BlueprintCat
 private func buildBlueprintTree(
     parentId: UUID?,
     grouped: [UUID?: [Blueprint]],
-    crafterMap: [UUID: [BlueprintCrafterResponseDTO]]
+    crafterMap: [UUID: [BlueprintCrafterResponseDTO]],
+    latestActivityMap: [UUID: Date]
 ) throws -> [BlueprintTreeNodeDTO] {
     let nodes = (grouped[parentId] ?? []).sorted {
         $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }
 
-    return try nodes.map { node in
+    return try nodes.compactMap { node in
+        guard !node.hideFromBlueprints else { return nil }
         guard let nodeID = node.id else { throw Abort(.internalServerError) }
         return .init(
             id: nodeID,
             parentId: node.$parent.id,
             name: node.name,
             description: node.description,
+            itemCode: node.itemCode,
+            createdAt: node.createdAt,
+            latestActivityAt: latestActivityMap[nodeID],
             badges: decodeBlueprintBadges(node.badgesCSV),
+            hideFromBlueprints: node.hideFromBlueprints,
             category: node.category,
             isCraftable: node.isCraftable,
             crafters: crafterMap[nodeID] ?? [],
-            children: try buildBlueprintTree(parentId: nodeID, grouped: grouped, crafterMap: crafterMap)
+            children: try buildBlueprintTree(
+                parentId: nodeID,
+                grouped: grouped,
+                crafterMap: crafterMap,
+                latestActivityMap: latestActivityMap
+            )
         )
     }
 }
@@ -211,17 +270,20 @@ private func blueprintDetailDTO(
 
     let breadcrumb = breadcrumbIds.compactMap { id -> BlueprintBreadcrumbItemDTO? in
         guard let item = byId[id] else { return nil }
-        return .init(id: id, name: item.name)
+            return .init(id: id, name: item.name)
     } + [.init(id: blueprintID, name: blueprint.name)]
 
     let childDtos = try children
+        .filter { !$0.hideFromBlueprints }
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         .map { child in
             guard let childID = child.id else { throw Abort(.internalServerError) }
             return BlueprintChildSummaryDTO(
                 id: childID,
                 name: child.name,
+                itemCode: child.itemCode,
                 badges: decodeBlueprintBadges(child.badgesCSV),
+                hideFromBlueprints: child.hideFromBlueprints,
                 category: child.category,
                 isCraftable: child.isCraftable,
                 childCount: groupedByParent[childID]?.count ?? 0,
@@ -234,8 +296,10 @@ private func blueprintDetailDTO(
         parentId: blueprint.$parent.id,
         name: blueprint.name,
         description: blueprint.description,
+        itemCode: blueprint.itemCode,
         badges: decodeBlueprintBadges(blueprint.badgesCSV),
         availableBadges: availableBadges,
+        hideFromBlueprints: blueprint.hideFromBlueprints,
         category: blueprint.category,
         isCraftable: blueprint.isCraftable,
         breadcrumb: breadcrumb,
@@ -248,9 +312,15 @@ func listBlueprints(_ req: Request) async throws -> BlueprintListResponseDTO {
     _ = try requireNonGuestUser(req)
 
     let (blueprints, assignments, usersById) = try await loadBlueprintContext(on: req.db)
+    let storageEntries = try await StorageEntry.query(on: req.db).all()
     let crafterMap = buildCrafterMap(assignments, usersById: usersById)
+    let latestActivityMap = buildBlueprintActivityMap(
+        blueprints: blueprints,
+        assignments: assignments,
+        storageEntries: storageEntries
+    )
     let groupedByParent = Dictionary(grouping: blueprints, by: { $0.$parent.id })
-    let roots = blueprints.filter { $0.$parent.id == nil && $0.category == .blueprints }
+    let roots = blueprints.filter { $0.$parent.id == nil && $0.category == .blueprints && !$0.hideFromBlueprints }
 
     let tree = try roots
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -261,11 +331,20 @@ func listBlueprints(_ req: Request) async throws -> BlueprintListResponseDTO {
                 parentId: nil,
                 name: root.name,
                 description: root.description,
+                itemCode: root.itemCode,
+                createdAt: root.createdAt,
+                latestActivityAt: latestActivityMap[rootID],
                 badges: decodeBlueprintBadges(root.badgesCSV),
+                hideFromBlueprints: root.hideFromBlueprints,
                 category: root.category,
                 isCraftable: root.isCraftable,
                 crafters: crafterMap[rootID] ?? [],
-                children: try buildBlueprintTree(parentId: rootID, grouped: groupedByParent, crafterMap: crafterMap)
+                children: try buildBlueprintTree(
+                    parentId: rootID,
+                    grouped: groupedByParent,
+                    crafterMap: crafterMap,
+                    latestActivityMap: latestActivityMap
+                )
             )
         }
 
@@ -299,6 +378,7 @@ func createBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO 
         }
         resolvedCategory = parent.category
     } else {
+        try requireBlueprintAdmin(actor)
         resolvedCategory = .blueprints
     }
 
@@ -306,7 +386,9 @@ func createBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO 
         parentID: body.parentId,
         name: try sanitizeBlueprintName(body.name),
         description: sanitizeBlueprintDescription(body.description),
+        itemCode: sanitizeBlueprintItemCode(body.itemCode),
         badgesCSV: encodeBlueprintBadges(badges),
+        hideFromBlueprints: sanitizeHideFromBlueprints(body.hideFromBlueprints),
         category: resolvedCategory,
         isCraftable: false
     )
@@ -362,7 +444,11 @@ func updateBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO 
 
     blueprint.name = try sanitizeBlueprintName(body.name)
     blueprint.description = sanitizeBlueprintDescription(body.description)
+    blueprint.itemCode = sanitizeBlueprintItemCode(body.itemCode)
     blueprint.badgesCSV = encodeBlueprintBadges(badges)
+    if actor.role == .admin || actor.role == .superAdmin {
+        blueprint.hideFromBlueprints = sanitizeHideFromBlueprints(body.hideFromBlueprints)
+    }
     blueprint.category = resolvedCategory
     try await blueprint.save(on: req.db)
 
@@ -548,6 +634,120 @@ func deleteBlueprintBadge(_ req: Request) async throws -> BlueprintListResponseD
     )
 
     return try await listBlueprints(req)
+}
+
+func mergeBlueprint(_ req: Request) async throws -> BlueprintDetailResponseDTO {
+    let actor = try requireBlueprintEditor(req)
+    try requireBlueprintAdmin(actor)
+
+    guard let currentBlueprint = try await Blueprint.find(req.parameters.get("blueprintID"), on: req.db) else {
+        throw Abort(.notFound)
+    }
+    let currentId = try currentBlueprint.requireID()
+    let body = try req.content.decode(BlueprintMergeDTO.self)
+
+    guard body.otherBlueprintId != currentId else {
+        throw Abort(.badRequest, reason: "Cannot merge a blueprint with itself")
+    }
+    guard let otherBlueprint = try await Blueprint.find(body.otherBlueprintId, on: req.db) else {
+        throw Abort(.badRequest, reason: "Other blueprint not found")
+    }
+
+    let keepCurrent = body.keepValuesFrom.uppercased() != "OTHER"
+    let primary = keepCurrent ? currentBlueprint : otherBlueprint
+    let secondary = keepCurrent ? otherBlueprint : currentBlueprint
+    let primaryId = try primary.requireID()
+    let secondaryId = try secondary.requireID()
+
+    let targetParentId: UUID?
+    switch body.parentChoice.uppercased() {
+    case "OTHER":
+        targetParentId = otherBlueprint.$parent.id
+    case "ROOT":
+        targetParentId = nil
+    default:
+        targetParentId = currentBlueprint.$parent.id
+    }
+
+    let allBlueprints = try await Blueprint.query(on: req.db).all()
+    let groupedByParent = Dictionary(grouping: allBlueprints, by: { $0.$parent.id })
+    let secondaryDescendantIds = collectDescendantIds(rootId: secondaryId, groupedByParent: groupedByParent)
+    if let targetParentId, (targetParentId == secondaryId || secondaryDescendantIds.contains(targetParentId)) {
+        throw Abort(.badRequest, reason: "Selected parent would create an invalid hierarchy")
+    }
+
+    primary.$parent.id = targetParentId
+    primary.badgesCSV = encodeBlueprintBadges(
+        sanitizeBlueprintBadges(decodeBlueprintBadges(primary.badgesCSV) + decodeBlueprintBadges(secondary.badgesCSV))
+    )
+    primary.isCraftable = primary.isCraftable || secondary.isCraftable
+    try await primary.save(on: req.db)
+
+    let secondaryChildren = try await Blueprint.query(on: req.db)
+        .filter(\.$parent.$id == secondaryId)
+        .all()
+    for child in secondaryChildren {
+        child.$parent.id = primaryId
+        try await child.save(on: req.db)
+    }
+
+    let existingPrimaryAssignments = try await BlueprintCrafter.query(on: req.db)
+        .filter(\.$blueprint.$id == primaryId)
+        .all()
+    let existingPrimaryUserIds = Set(existingPrimaryAssignments.map { $0.$user.id })
+    let secondaryAssignments = try await BlueprintCrafter.query(on: req.db)
+        .filter(\.$blueprint.$id == secondaryId)
+        .all()
+
+    for assignment in secondaryAssignments where !existingPrimaryUserIds.contains(assignment.$user.id) {
+        let mergedAssignment = BlueprintCrafter(blueprintID: primaryId, userID: assignment.$user.id)
+        try await mergedAssignment.save(on: req.db)
+    }
+
+    let secondaryStorageEntries = try await StorageEntry.query(on: req.db)
+        .filter(\.$item.$id == secondaryId)
+        .all()
+    for entry in secondaryStorageEntries {
+        entry.$item.id = primaryId
+        try await entry.save(on: req.db)
+    }
+
+    try await BlueprintCrafter.query(on: req.db)
+        .filter(\.$blueprint.$id == secondaryId)
+        .delete()
+    try await secondary.delete(on: req.db)
+
+    await recordAuditEvent(
+        on: req,
+        actor: actor,
+        action: "blueprint.merge",
+        entityType: "blueprint",
+        entityId: primaryId,
+        details: "merged=\(secondaryId.uuidString);keepValuesFrom=\(body.keepValuesFrom);parentChoice=\(body.parentChoice)"
+    )
+
+    return try await getBlueprintById(primaryId, on: req.db)
+}
+
+func deleteBlueprint(_ req: Request) async throws -> HTTPStatus {
+    let actor = try requireBlueprintEditor(req)
+    try requireBlueprintAdmin(actor)
+
+    guard let blueprint = try await Blueprint.find(req.parameters.get("blueprintID"), on: req.db) else {
+        throw Abort(.notFound)
+    }
+    let blueprintId = try blueprint.requireID()
+    try await blueprint.delete(on: req.db)
+
+    await recordAuditEvent(
+        on: req,
+        actor: actor,
+        action: "blueprint.delete",
+        entityType: "blueprint",
+        entityId: blueprintId
+    )
+
+    return .noContent
 }
 
 private func getBlueprintById(_ blueprintId: UUID?, on db: Database) async throws -> BlueprintDetailResponseDTO {

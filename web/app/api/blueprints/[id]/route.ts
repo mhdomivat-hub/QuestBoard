@@ -40,3 +40,21 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     headers: { "Content-Type": "application/json" }
   });
 }
+
+export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+  const token = cookies().get(COOKIE_NAME)?.value;
+  if (!token) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  const res = await fetch(`${API_BASE}/blueprints/${params.id}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const text = await res.text();
+  return new NextResponse(text, {
+    status: res.status,
+    headers: { "Content-Type": text ? "application/json" : "text/plain" }
+  });
+}

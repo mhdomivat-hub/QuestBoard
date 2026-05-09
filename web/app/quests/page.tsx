@@ -17,6 +17,7 @@ type Quest = {
   description: string;
   status: QuestStatus;
   isApproved: boolean;
+  isPrioritized: boolean;
   createdAt?: string;
 };
 
@@ -133,6 +134,9 @@ function QuestsPageContent() {
       const aPendingOpen = !a.isApproved && a.status === "OPEN";
       const bPendingOpen = !b.isApproved && b.status === "OPEN";
       if (aPendingOpen !== bPendingOpen) return aPendingOpen ? -1 : 1;
+      const aPriority = a.isPrioritized && a.isApproved && a.status !== "DONE" && a.status !== "ARCHIVED";
+      const bPriority = b.isPrioritized && b.isApproved && b.status !== "DONE" && b.status !== "ARCHIVED";
+      if (aPriority !== bPriority) return aPriority ? -1 : 1;
       const statusDelta = statusOrder[a.status] - statusOrder[b.status];
       if (statusDelta !== 0) return statusDelta;
       return a.title.localeCompare(b.title);
@@ -205,10 +209,11 @@ function QuestsPageContent() {
 
       <section className="qb-grid">
         {filteredQuests.map((q) => (
-          <Card key={q.id}>
+          <Card key={q.id} className={q.isPrioritized ? "qb-card-priority" : ""}>
             <div className="qb-inline" style={{ justifyContent: "space-between" }}>
               <strong><a href={`/quests/${q.id}`}>{q.title}</a></strong>
               <div className="qb-inline">
+                {q.isPrioritized ? <Badge label="PRIORITAET" /> : null}
                 {!q.isApproved ? <Badge label="PENDING" /> : null}
                 <Badge label={q.status} />
               </div>

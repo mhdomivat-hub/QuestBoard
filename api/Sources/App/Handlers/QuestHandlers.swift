@@ -15,6 +15,7 @@ func questFromRow(_ row: SQLRow) throws -> QuestResponseDTO {
     let createdByUsername: String? = try? row.decode(column: "created_by_username", as: String.self)
     let isApproved: Bool = try row.decode(column: "is_approved", as: Bool.self)
     let approvedAt: Date? = try row.decodeNil(column: "approved_at") ? nil : row.decode(column: "approved_at", as: Date.self)
+    let isPrioritized: Bool = try row.decode(column: "is_prioritized", as: Bool.self)
     return .init(
         id: id,
         title: title,
@@ -25,7 +26,8 @@ func questFromRow(_ row: SQLRow) throws -> QuestResponseDTO {
         createdByUserId: createdByUserId,
         createdByUsername: createdByUsername,
         isApproved: isApproved,
-        approvedAt: approvedAt
+        approvedAt: approvedAt,
+        isPrioritized: isPrioritized
     )
 }
 
@@ -60,7 +62,7 @@ func listQuests(_ req: Request) async throws -> [QuestResponseDTO] {
     let rows: [SQLRow]
     if isAdminRole(actor.role) {
         rows = try await sql.raw("""
-            SELECT q.id, q.title, q.description, q.handover_info, q.status, q.created_at, q.created_by_user_id, q.is_approved, q.approved_at, u.username AS created_by_username
+            SELECT q.id, q.title, q.description, q.handover_info, q.status, q.created_at, q.created_by_user_id, q.is_approved, q.approved_at, q.is_prioritized, u.username AS created_by_username
             FROM quests q
             LEFT JOIN users u ON u.id = q.created_by_user_id
             ORDER BY title ASC
@@ -69,7 +71,7 @@ func listQuests(_ req: Request) async throws -> [QuestResponseDTO] {
             """).all()
     } else {
         rows = try await sql.raw("""
-            SELECT q.id, q.title, q.description, q.handover_info, q.status, q.created_at, q.created_by_user_id, q.is_approved, q.approved_at, u.username AS created_by_username
+            SELECT q.id, q.title, q.description, q.handover_info, q.status, q.created_at, q.created_by_user_id, q.is_approved, q.approved_at, q.is_prioritized, u.username AS created_by_username
             FROM quests q
             LEFT JOIN users u ON u.id = q.created_by_user_id
             WHERE q.is_approved = TRUE OR q.created_by_user_id = \(bind: actorId)
@@ -99,7 +101,7 @@ func getQuest(_ req: Request) async throws -> QuestResponseDTO {
     }
 
     let rows = try await sql.raw("""
-        SELECT q.id, q.title, q.description, q.handover_info, q.status, q.created_at, q.created_by_user_id, q.is_approved, q.approved_at, u.username AS created_by_username
+        SELECT q.id, q.title, q.description, q.handover_info, q.status, q.created_at, q.created_by_user_id, q.is_approved, q.approved_at, q.is_prioritized, u.username AS created_by_username
         FROM quests q
         LEFT JOIN users u ON u.id = q.created_by_user_id
         WHERE q.id = \(bind: questID)
@@ -128,6 +130,7 @@ func createQuest(_ req: Request) async throws -> QuestResponseDTO {
 
     let status = try normalizedQuestStatus(body.status)
     let handoverInfo = normalizeOptionalHandoverInfo(body.handoverInfo)
+    let isPrioritized = isAdminRole(actor.role) ? (body.isPrioritized ?? false) : false
     let id = UUID()
     let terminalSinceAt: Date? = terminalQuestStatuses.contains(status) ? Date() : nil
     let isApproved = isAdminRole(actor.role)
@@ -135,8 +138,8 @@ func createQuest(_ req: Request) async throws -> QuestResponseDTO {
     let approvedByUserId: UUID? = isApproved ? actorId : nil
 
     try await sql.raw("""
-        INSERT INTO quests (id, title, description, handover_info, status, terminal_since_at, deleted_at, created_by_user_id, is_approved, approved_at, approved_by_user_id)
-        VALUES (\(bind: id), \(bind: body.title), \(bind: body.description), \(bind: handoverInfo), \(bind: status), \(bind: terminalSinceAt), NULL, \(bind: actorId), \(bind: isApproved), \(bind: approvedAt), \(bind: approvedByUserId))
+        INSERT INTO quests (id, title, description, handover_info, status, is_prioritized, terminal_since_at, deleted_at, created_by_user_id, is_approved, approved_at, approved_by_user_id)
+        VALUES (\(bind: id), \(bind: body.title), \(bind: body.description), \(bind: handoverInfo), \(bind: status), \(bind: isPrioritized), \(bind: terminalSinceAt), NULL, \(bind: actorId), \(bind: isApproved), \(bind: approvedAt), \(bind: approvedByUserId))
         """).run()
 
     await recordAuditEvent(
@@ -145,7 +148,7 @@ func createQuest(_ req: Request) async throws -> QuestResponseDTO {
         action: "quest.create",
         entityType: "quest",
         entityId: id,
-        details: "status=\(status),approved=\(isApproved)"
+        details: "status=\(status),approved=\(isApproved),prioritized=\(isPrioritized)"
     )
 
     return .init(
@@ -158,7 +161,8 @@ func createQuest(_ req: Request) async throws -> QuestResponseDTO {
         createdByUserId: actorId,
         createdByUsername: actor.username,
         isApproved: isApproved,
-        approvedAt: approvedAt
+        approvedAt: approvedAt,
+        isPrioritized: isPrioritized
     )
 }
 
@@ -187,7 +191,7 @@ func updateQuestStatus(_ req: Request) async throws -> QuestResponseDTO {
         SET status = \(bind: status),
             terminal_since_at = \(bind: terminalSinceAt)
         WHERE id = \(bind: questID)
-        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at
+        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at, is_prioritized
         """).all()
     if rows.isEmpty {
         throw Abort(.notFound)
@@ -232,14 +236,16 @@ func updateQuestDetails(_ req: Request) async throws -> QuestResponseDTO {
         throw Abort(.badRequest, reason: "description is required")
     }
     let handoverInfo = normalizeOptionalHandoverInfo(body.handoverInfo)
+    let prioritizedValue: Bool? = isAdminRole(actor.role) ? body.isPrioritized : nil
 
     let rows: [SQLRow] = try await sql.raw("""
         UPDATE quests
         SET title = \(bind: title),
             description = \(bind: description),
-            handover_info = \(bind: handoverInfo)
+            handover_info = \(bind: handoverInfo),
+            is_prioritized = COALESCE(\(bind: prioritizedValue), is_prioritized)
         WHERE id = \(bind: questID)
-        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at
+        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at, is_prioritized
         """).all()
     guard let row = rows.first else {
         throw Abort(.notFound)
@@ -250,7 +256,8 @@ func updateQuestDetails(_ req: Request) async throws -> QuestResponseDTO {
         actor: actor,
         action: "quest.details.update",
         entityType: "quest",
-        entityId: response.id
+        entityId: response.id,
+        details: isAdminRole(actor.role) ? "prioritized=\(response.isPrioritized)" : nil
     )
     return response
 }
@@ -268,7 +275,7 @@ func markQuestDeleted(_ req: Request) async throws -> QuestResponseDTO {
     let rows: [SQLRow] = try await sql.raw("""
         DELETE FROM quests
         WHERE id = \(bind: questID) AND status = \(bind: Quest.Status.archived.rawValue)
-        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at
+        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at, is_prioritized
         """).all()
     guard let row = rows.first else {
         let existsRows = try await sql.raw("SELECT id, status FROM quests WHERE id = \(bind: questID) LIMIT 1").all()
@@ -306,7 +313,7 @@ func restoreQuest(_ req: Request) async throws -> QuestResponseDTO {
         UPDATE quests
         SET deleted_at = NULL
         WHERE id = \(bind: questID)
-        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at
+        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at, is_prioritized
         """).all()
     guard let row = rows.first else {
         throw Abort(.notFound)
@@ -341,7 +348,7 @@ func approveQuest(_ req: Request) async throws -> QuestResponseDTO {
             approved_at = \(bind: now),
             approved_by_user_id = \(bind: actorId)
         WHERE id = \(bind: questID)
-        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at
+        RETURNING id, title, description, handover_info, status, created_at, created_by_user_id, is_approved, approved_at, is_prioritized
         """).all()
     guard let row = rows.first else {
         throw Abort(.notFound)
@@ -358,3 +365,4 @@ func approveQuest(_ req: Request) async throws -> QuestResponseDTO {
 
     return response
 }
+

@@ -16,6 +16,7 @@ export default function NewQuestPage() {
   const [description, setDescription] = useState("");
   const [handoverInfo, setHandoverInfo] = useState("");
   const [status, setStatus] = useState<QuestStatus>("OPEN");
+  const [isPrioritized, setIsPrioritized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [role, setRole] = useState<UserRole | null>(null);
@@ -44,7 +45,7 @@ export default function NewQuestPage() {
 
     try {
       const payload = canAdmin
-        ? { title, description, handoverInfo: handoverInfo || null, status }
+        ? { title, description, handoverInfo: handoverInfo || null, status, isPrioritized }
         : { title, description, handoverInfo: handoverInfo || null, status: "OPEN" };
 
       const res = await fetch("/api/quests", {
@@ -85,11 +86,21 @@ export default function NewQuestPage() {
             onChange={(e) => setHandoverInfo(e.target.value)}
           />
           {canAdmin ? (
-            <SelectInput value={status} onChange={(e) => setStatus(e.target.value as QuestStatus)}>
-              {statuses.map((s) => (
-                <option key={s} value={s}>{statusLabel(s)}</option>
-              ))}
-            </SelectInput>
+            <>
+              <SelectInput value={status} onChange={(e) => setStatus(e.target.value as QuestStatus)}>
+                {statuses.map((s) => (
+                  <option key={s} value={s}>{statusLabel(s)}</option>
+                ))}
+              </SelectInput>
+              <label className="qb-inline" style={{ alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={isPrioritized}
+                  onChange={(e) => setIsPrioritized(e.target.checked)}
+                />
+                <span>Quest priorisieren</span>
+              </label>
+            </>
           ) : null}
           <Button type="submit" variant="primary" disabled={submitting}>
             {submitting ? "Speichert..." : "Quest anlegen"}

@@ -78,7 +78,7 @@ private func loadQuestResponseById(_ questId: UUID, on db: Database) async throw
     }
 
     let rows = try await sql.raw("""
-        SELECT q.id, q.title, q.description, q.handover_info, q.status, q.created_at, q.created_by_user_id, q.is_approved, q.approved_at, u.username AS created_by_username
+        SELECT q.id, q.title, q.description, q.handover_info, q.status, q.created_at, q.created_by_user_id, q.is_approved, q.approved_at, q.is_prioritized, u.username AS created_by_username
         FROM quests q
         LEFT JOIN users u ON u.id = q.created_by_user_id
         WHERE q.id = \(bind: questId)
