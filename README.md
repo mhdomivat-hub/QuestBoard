@@ -123,8 +123,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-ghcr.ps1 -Tag v0.1.0 
 
 Das Skript:
 - meldet dich bei `ghcr.io` an
-- baut `api` und `web` lokal
-- pusht beide Images
+- baut `api`, `web` und `discord-bot` lokal
+- pusht alle drei Images
 
 ### Server auf GHCR-Deployment umstellen
 
@@ -219,7 +219,7 @@ docker compose -f /opt/questboard/docker-compose.yml up -d --build
 
 - `docker-compose.yml`
   - aktuelle Standardloesung
-  - baut `api` und `web` direkt auf dem Zielsystem
+  - baut `api`, `web` und `discord-bot` direkt auf dem Zielsystem
 
 - `docker-compose.ghcr.yml`
   - alternative Release-Loesung

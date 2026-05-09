@@ -14,16 +14,20 @@ if (-not $Tag) {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $apiImage = "ghcr.io/$Namespace/questboard-api:$Tag"
 $webImage = "ghcr.io/$Namespace/questboard-web:$Tag"
+$discordBotImage = "ghcr.io/$Namespace/questboard-discord-bot:$Tag"
 $apiLatestImage = "ghcr.io/$Namespace/questboard-api:latest"
 $webLatestImage = "ghcr.io/$Namespace/questboard-web:latest"
+$discordBotLatestImage = "ghcr.io/$Namespace/questboard-discord-bot:latest"
 
 Write-Host "Publishing QuestBoard images to GHCR"
 Write-Host "  Namespace: $Namespace"
 Write-Host "  Tag:       $Tag"
-Write-Host "  API:       $apiImage"
-Write-Host "  Web:       $webImage"
-Write-Host "  API latest: $apiLatestImage"
-Write-Host "  Web latest: $webLatestImage"
+Write-Host "  API:         $apiImage"
+Write-Host "  Web:         $webImage"
+Write-Host "  Discord Bot: $discordBotImage"
+Write-Host "  API latest:         $apiLatestImage"
+Write-Host "  Web latest:         $webLatestImage"
+Write-Host "  Discord Bot latest: $discordBotLatestImage"
 
 $token = $env:GHCR_TOKEN
 if (-not $token) {
@@ -35,19 +39,23 @@ $token | docker login ghcr.io -u $Username --password-stdin | Out-Host
 if (-not $SkipBuild) {
   docker build -t $apiImage "$repoRoot\api"
   docker build -t $webImage "$repoRoot\web"
+  docker build -t $discordBotImage "$repoRoot\discord-bot"
 }
 
 if ($Tag -ne "latest") {
   docker tag $apiImage $apiLatestImage
   docker tag $webImage $webLatestImage
+  docker tag $discordBotImage $discordBotLatestImage
 }
 
 docker push $apiImage
 docker push $webImage
+docker push $discordBotImage
 
 if ($Tag -ne "latest") {
   docker push $apiLatestImage
   docker push $webLatestImage
+  docker push $discordBotLatestImage
 }
 
 Write-Host ""
