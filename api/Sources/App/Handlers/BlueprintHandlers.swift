@@ -257,6 +257,7 @@ private func blueprintDetailDTO(
     groupedByParent: [UUID?: [Blueprint]],
     children: [Blueprint],
     crafterMap: [UUID: [BlueprintCrafterResponseDTO]],
+    recipeResources: [CraftingRecipeResourceDTO],
     availableBadges: [String]
 ) throws -> BlueprintDetailResponseDTO {
     guard let blueprintID = blueprint.id else { throw Abort(.internalServerError) }
@@ -303,9 +304,47 @@ private func blueprintDetailDTO(
         category: blueprint.category,
         isCraftable: blueprint.isCraftable,
         breadcrumb: breadcrumb,
+        recipeResources: recipeResources,
         children: childDtos,
         crafters: crafterMap[blueprintID] ?? []
     )
+}
+
+private func buildRecipeResourceDTOs(
+    blueprintId: UUID,
+    recipeResources: [BlueprintRecipeResource],
+    storageEntries: [StorageEntry],
+    usersById: [UUID: User]
+) -> [CraftingRecipeResourceDTO] {
+    let entriesByResource = Dictionary(grouping: storageEntries, by: { $0.$item.id })
+
+    return recipeResources
+        .filter { $0.$blueprint.id == blueprintId }
+        .compactMap { recipe -> CraftingRecipeResourceDTO? in
+            guard let recipeId = recipe.id else { return nil }
+            let entries = entriesByResource[recipe.$resource.id] ?? []
+            let people: [StoragePersonDTO] = Dictionary(grouping: entries, by: { $0.$user.id }).compactMap { userId, _ in
+                guard let user = usersById[userId], let resolvedUserId = user.id else { return nil }
+                return StoragePersonDTO(userId: resolvedUserId, username: user.username)
+            }.sorted { $0.username.localizedCaseInsensitiveCompare($1.username) == .orderedAscending }
+
+            return CraftingRecipeResourceDTO(
+                id: recipeId,
+                resourceId: recipe.$resource.id,
+                resourceName: recipe.resourceName,
+                slotName: recipe.slotName,
+                quantity: recipe.quantity,
+                minQuality: recipe.minQuality,
+                totalStoredQty: entries.reduce(0) { $0 + $1.qty },
+                people: people
+            )
+        }
+        .sorted {
+            if $0.slotName.localizedCaseInsensitiveCompare($1.slotName) != .orderedSame {
+                return $0.slotName.localizedCaseInsensitiveCompare($1.slotName) == .orderedAscending
+            }
+            return $0.resourceName.localizedCaseInsensitiveCompare($1.resourceName) == .orderedAscending
+        }
 }
 
 func listBlueprints(_ req: Request) async throws -> BlueprintListResponseDTO {
@@ -756,6 +795,8 @@ private func getBlueprintById(_ blueprintId: UUID?, on db: Database) async throw
     }
 
     let (blueprints, assignments, usersById) = try await loadBlueprintContext(on: db)
+    let recipeResources = try await BlueprintRecipeResource.query(on: db).all()
+    let storageEntries = try await StorageEntry.query(on: db).all()
     let byId = Dictionary(uniqueKeysWithValues: blueprints.compactMap { item in
         item.id.map { ($0, item) }
     })
@@ -769,6 +810,12 @@ private func getBlueprintById(_ blueprintId: UUID?, on db: Database) async throw
         groupedByParent: groupedByParent,
         children: children,
         crafterMap: crafterMap,
+        recipeResources: buildRecipeResourceDTOs(
+            blueprintId: blueprintId,
+            recipeResources: recipeResources,
+            storageEntries: storageEntries,
+            usersById: usersById
+        ),
         availableBadges: collectAvailableBadges(blueprints)
     )
 }

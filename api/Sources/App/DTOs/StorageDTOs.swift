@@ -62,11 +62,19 @@ struct StorageEntryCreateDTO: Content {
     let qty: Int
     let note: String?
     let userId: UUID?
+    let resources: [StorageEntryResourceUsageInputDTO]?
 }
 
 struct StorageEntryUpdateDTO: Content {
     let qty: Int
     let note: String?
+    let resources: [StorageEntryResourceUsageInputDTO]?
+}
+
+struct StorageEntryResourceUsageInputDTO: Content {
+    let resourceId: UUID
+    let quantity: Double
+    let quality: Int?
 }
 
 struct MoveOwnStorageEntriesDTO: Content {
@@ -106,6 +114,15 @@ struct StorageEntryResponseDTO: Content {
     let qty: Int
     let note: String?
     let createdAt: Date?
+    let resources: [StorageEntryResourceUsageDTO]
+}
+
+struct StorageEntryResourceUsageDTO: Content {
+    let id: UUID
+    let resourceId: UUID
+    let resourceName: String
+    let quantity: Double
+    let quality: Int?
 }
 
 struct StorageItemTreeNodeDTO: Content {
@@ -170,6 +187,7 @@ struct StorageItemDetailDTO: Content {
     let openSearchCount: Int
     let entryCount: Int
     let breadcrumb: [StorageBreadcrumbItemDTO]
+    let recipeResources: [CraftingRecipeResourceDTO]
     let children: [StorageItemChildSummaryDTO]
     let entries: [StorageEntryResponseDTO]
     let availableUsers: [StoragePersonDTO]

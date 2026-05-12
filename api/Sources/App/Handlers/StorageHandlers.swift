@@ -66,6 +66,21 @@ private func sanitizeStorageHideFromBlueprints(_ raw: Bool?) -> Bool {
     raw ?? false
 }
 
+private func sanitizeResourceUsageQuantity(_ raw: Double) throws -> Double {
+    guard raw > 0 else {
+        throw Abort(.badRequest, reason: "Resource quantity must be > 0")
+    }
+    return raw
+}
+
+private func sanitizeResourceUsageQuality(_ raw: Int?) throws -> Int? {
+    guard let raw else { return nil }
+    guard raw >= 0 && raw <= 1000 else {
+        throw Abort(.badRequest, reason: "Resource quality must be between 0 and 1000")
+    }
+    return raw
+}
+
 private func sanitizeStorageBadges(_ values: [String]?) -> [String] {
     var seen: Set<String> = []
     var result: [String] = []
@@ -179,13 +194,28 @@ private func availablePeople(from users: [User]) -> [StoragePersonDTO] {
     }.sorted { $0.username.localizedCaseInsensitiveCompare($1.username) == .orderedAscending }
 }
 
-private func entryDTOs(entries: [StorageEntry], usersById: [UUID: User], locationsById: [UUID: StorageLocation]) -> [StorageEntryResponseDTO] {
+private func entryDTOs(
+    entries: [StorageEntry],
+    usersById: [UUID: User],
+    locationsById: [UUID: StorageLocation],
+    usagesByEntryId: [UUID: [StorageEntryResourceUsage]]
+) -> [StorageEntryResponseDTO] {
     entries.compactMap { entry in
         guard let entryId = entry.id,
               let user = usersById[entry.$user.id], let userId = user.id,
               locationsById[entry.$location.id] != nil else {
             return nil
         }
+        let usageDTOs = (usagesByEntryId[entryId] ?? []).compactMap { usage -> StorageEntryResourceUsageDTO? in
+            guard let usageId = usage.id else { return nil }
+            return .init(
+                id: usageId,
+                resourceId: usage.$resource.id,
+                resourceName: usage.resourceName,
+                quantity: usage.quantity,
+                quality: usage.quality
+            )
+        }.sorted { $0.resourceName.localizedCaseInsensitiveCompare($1.resourceName) == .orderedAscending }
         return .init(
             id: entryId,
             userId: userId,
@@ -194,7 +224,8 @@ private func entryDTOs(entries: [StorageEntry], usersById: [UUID: User], locatio
             locationLabel: buildLocationLabel(locationId: entry.$location.id, byId: locationsById),
             qty: entry.qty,
             note: entry.note,
-            createdAt: entry.createdAt
+            createdAt: entry.createdAt,
+            resources: usageDTOs
         )
     }.sorted { a, b in
         let left = a.createdAt?.timeIntervalSince1970 ?? 0
@@ -296,6 +327,73 @@ private func buildStorageActivityMap(
     return result
 }
 
+private func buildStorageRecipeResourceDTOs(
+    itemId: UUID,
+    recipeResources: [BlueprintRecipeResource],
+    storageEntries: [StorageEntry],
+    usersById: [UUID: User]
+) -> [CraftingRecipeResourceDTO] {
+    let entriesByResource = Dictionary(grouping: storageEntries, by: { $0.$item.id })
+
+    return recipeResources
+        .filter { $0.$blueprint.id == itemId }
+        .compactMap { recipe -> CraftingRecipeResourceDTO? in
+            guard let recipeId = recipe.id else { return nil }
+            let entries = entriesByResource[recipe.$resource.id] ?? []
+            let people: [StoragePersonDTO] = Dictionary(grouping: entries, by: { $0.$user.id }).compactMap { userId, _ in
+                guard let user = usersById[userId], let resolvedUserId = user.id else { return nil }
+                return StoragePersonDTO(userId: resolvedUserId, username: user.username)
+            }.sorted { $0.username.localizedCaseInsensitiveCompare($1.username) == .orderedAscending }
+
+            return CraftingRecipeResourceDTO(
+                id: recipeId,
+                resourceId: recipe.$resource.id,
+                resourceName: recipe.resourceName,
+                slotName: recipe.slotName,
+                quantity: recipe.quantity,
+                minQuality: recipe.minQuality,
+                totalStoredQty: entries.reduce(0) { $0 + $1.qty },
+                people: people
+            )
+        }
+        .sorted {
+            if $0.slotName.localizedCaseInsensitiveCompare($1.slotName) != .orderedSame {
+                return $0.slotName.localizedCaseInsensitiveCompare($1.slotName) == .orderedAscending
+            }
+            return $0.resourceName.localizedCaseInsensitiveCompare($1.resourceName) == .orderedAscending
+        }
+}
+
+private func replaceStorageEntryResourceUsages(
+    entryId: UUID,
+    usages: [StorageEntryResourceUsageInputDTO]?,
+    on db: Database
+) async throws {
+    try await StorageEntryResourceUsage.query(on: db)
+        .filter(\.$entry.$id == entryId)
+        .delete()
+
+    guard let usages else { return }
+
+    var seen: Set<UUID> = []
+    for usage in usages {
+        guard !seen.contains(usage.resourceId) else { continue }
+        seen.insert(usage.resourceId)
+
+        guard let resource = try await Blueprint.find(usage.resourceId, on: db) else {
+            throw Abort(.badRequest, reason: "Resource not found")
+        }
+        let storedUsage = StorageEntryResourceUsage(
+            entryID: entryId,
+            resourceID: usage.resourceId,
+            resourceName: resource.name,
+            quantity: try sanitizeResourceUsageQuantity(usage.quantity),
+            quality: try sanitizeResourceUsageQuality(usage.quality)
+        )
+        try await storedUsage.save(on: db)
+    }
+}
+
 private func buildItemTree(
     parentId: UUID?,
     grouped: [UUID?: [Blueprint]],
@@ -359,6 +457,8 @@ private func storageItemDetail(
     locations: [StorageLocation],
     users: [User],
     entries: [StorageEntry],
+    recipeResources: [BlueprintRecipeResource],
+    resourceUsages: [StorageEntryResourceUsage],
     crafterCountsByItem: [UUID: Int],
     openSearchCountsByItem: [UUID: Int]
 ) throws -> StorageItemDetailDTO {
@@ -373,6 +473,7 @@ private func storageItemDetail(
     let usersById = Dictionary(uniqueKeysWithValues: users.compactMap { entry in
         entry.id.map { ($0, entry) }
     })
+    let usagesByEntryId = Dictionary(grouping: resourceUsages, by: { $0.$entry.id })
     let groupedItems = Dictionary(grouping: allItems, by: { $0.$parent.id })
     let groupedLocations = Dictionary(grouping: locations, by: { $0.$parent.id })
 
@@ -387,8 +488,19 @@ private func storageItemDetail(
         itemsById[id].map { StorageBreadcrumbItemDTO(id: id, name: $0.name) }
     } + [StorageBreadcrumbItemDTO(id: itemId, name: item.name)]
 
-    let entryDtos = entryDTOs(entries: entries.filter { $0.$item.id == itemId }, usersById: usersById, locationsById: locationsById)
+    let entryDtos = entryDTOs(
+        entries: entries.filter { $0.$item.id == itemId },
+        usersById: usersById,
+        locationsById: locationsById,
+        usagesByEntryId: usagesByEntryId
+    )
     let entriesByItemId = Dictionary(grouping: entries, by: { $0.$item.id })
+    let recipeDTOs = buildStorageRecipeResourceDTOs(
+        itemId: itemId,
+        recipeResources: recipeResources,
+        storageEntries: entries,
+        usersById: usersById
+    )
 
     func buildChildSummaries(parentId: UUID) throws -> [StorageItemChildSummaryDTO] {
         let children = (groupedItems[parentId] ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -435,6 +547,7 @@ private func storageItemDetail(
         openSearchCount: ownOpenSearchCount + childSummaries.reduce(0) { $0 + $1.openSearchCount },
         entryCount: ownEntryCount + childSummaries.reduce(0) { $0 + $1.entryCount },
         breadcrumb: breadcrumb,
+        recipeResources: recipeDTOs,
         children: childSummaries,
         entries: entryDtos,
         availableUsers: availablePeople(from: users),
@@ -451,6 +564,7 @@ func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
         .all()
     let locations = try await StorageLocation.query(on: req.db).all()
     let entries = try await StorageEntry.query(on: req.db).all()
+    let resourceUsages = try await StorageEntryResourceUsage.query(on: req.db).all()
     let users = try await User.query(on: req.db).all()
     let crafters = try await BlueprintCrafter.query(on: req.db).all()
     let searchRequests = try await ItemSearchRequest.query(on: req.db).all()
@@ -465,7 +579,12 @@ func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
     })
     let entryDtosWithItemIds = entries.compactMap { entry -> (UUID, StorageEntryResponseDTO)? in
         let itemId = entry.$item.id
-        let dtos = entryDTOs(entries: [entry], usersById: usersById, locationsById: locationsById)
+        let dtos = entryDTOs(
+            entries: [entry],
+            usersById: usersById,
+            locationsById: locationsById,
+            usagesByEntryId: Dictionary(grouping: resourceUsages, by: { $0.$entry.id })
+        )
         guard let dto = dtos.first else { return nil }
         return (itemId, dto)
     }
@@ -518,6 +637,8 @@ func getStorageItem(_ req: Request) async throws -> StorageItemDetailDTO {
     let crafters = try await BlueprintCrafter.query(on: req.db).all()
     let searchRequests = try await ItemSearchRequest.query(on: req.db).all()
     let badgeDefinitions = try await ItemBadgeDefinition.query(on: req.db).all()
+    let recipeResources = try await BlueprintRecipeResource.query(on: req.db).all()
+    let resourceUsages = try await StorageEntryResourceUsage.query(on: req.db).all()
     return try storageItemDetail(
         item: item,
         allItems: items,
@@ -525,6 +646,8 @@ func getStorageItem(_ req: Request) async throws -> StorageItemDetailDTO {
         locations: locations,
         users: users,
         entries: entries,
+        recipeResources: recipeResources,
+        resourceUsages: resourceUsages,
         crafterCountsByItem: Dictionary(grouping: crafters, by: { $0.$blueprint.id }).mapValues(\.count),
         openSearchCountsByItem: Dictionary(grouping: searchRequests.filter { $0.status == .open }, by: { $0.$item.id }).mapValues(\.count)
     )
@@ -927,6 +1050,7 @@ func createStorageEntry(_ req: Request) async throws -> StorageItemDetailDTO {
 
     let entry = StorageEntry(itemID: try item.requireID(), locationID: body.locationId, userID: targetUserId, qty: body.qty, note: sanitizeStorageDescription(body.note))
     try await entry.save(on: req.db)
+    try await replaceStorageEntryResourceUsages(entryId: try entry.requireID(), usages: body.resources, on: req.db)
     await recordAuditEvent(on: req, actor: actor, action: "storage.entry.create", entityType: "storage_item", entityId: item.id, details: "qty=\(body.qty)")
     return try await getStorageItemById(item.id, on: req.db)
 }
@@ -963,6 +1087,7 @@ func updateStorageEntry(_ req: Request) async throws -> StorageItemDetailDTO {
     entry.qty = body.qty
     entry.note = sanitizeStorageDescription(body.note)
     try await entry.save(on: req.db)
+    try await replaceStorageEntryResourceUsages(entryId: try entry.requireID(), usages: body.resources, on: req.db)
 
     let itemId = entry.$item.id
     await recordAuditEvent(
@@ -1063,6 +1188,8 @@ private func getStorageItemById(_ itemId: UUID?, on db: Database) async throws -
     let crafters = try await BlueprintCrafter.query(on: db).all()
     let searchRequests = try await ItemSearchRequest.query(on: db).all()
     let badgeDefinitions = try await ItemBadgeDefinition.query(on: db).all()
+    let recipeResources = try await BlueprintRecipeResource.query(on: db).all()
+    let resourceUsages = try await StorageEntryResourceUsage.query(on: db).all()
     return try storageItemDetail(
         item: item,
         allItems: allItems,
@@ -1070,6 +1197,8 @@ private func getStorageItemById(_ itemId: UUID?, on db: Database) async throws -
         locations: locations,
         users: users,
         entries: entries,
+        recipeResources: recipeResources,
+        resourceUsages: resourceUsages,
         crafterCountsByItem: Dictionary(grouping: crafters, by: { $0.$blueprint.id }).mapValues(\.count),
         openSearchCountsByItem: Dictionary(grouping: searchRequests.filter { $0.status == .open }, by: { $0.$item.id }).mapValues(\.count)
     )

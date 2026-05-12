@@ -75,8 +75,20 @@ struct BlueprintDetailResponseDTO: Content {
     let category: BlueprintCategory
     let isCraftable: Bool
     let breadcrumb: [BlueprintBreadcrumbItemDTO]
+    let recipeResources: [CraftingRecipeResourceDTO]
     let children: [BlueprintChildSummaryDTO]
     let crafters: [BlueprintCrafterResponseDTO]
+}
+
+struct CraftingRecipeResourceDTO: Content {
+    let id: UUID
+    let resourceId: UUID
+    let resourceName: String
+    let slotName: String
+    let quantity: Double
+    let minQuality: Int?
+    let totalStoredQty: Int
+    let people: [StoragePersonDTO]
 }
 
 struct BlueprintBreadcrumbItemDTO: Content {

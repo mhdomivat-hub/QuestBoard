@@ -10,7 +10,9 @@ type UserRole = "guest" | "member" | "admin" | "superAdmin";
 type Person = { userId: string; username: string };
 type LocationFilter = { id: string; label: string };
 type BadgeDefinition = { name: string; groupName?: string | null };
-type Entry = { id: string; userId: string; username: string; locationId: string; locationLabel: string; qty: number; note?: string | null; createdAt?: string | null };
+type RecipeResource = { id: string; resourceId: string; resourceName: string; slotName: string; quantity: number; minQuality?: number | null; totalStoredQty: number; people: Person[] };
+type EntryResourceUsage = { id: string; resourceId: string; resourceName: string; quantity: number; quality?: number | null };
+type Entry = { id: string; userId: string; username: string; locationId: string; locationLabel: string; qty: number; note?: string | null; createdAt?: string | null; resources: EntryResourceUsage[] };
 type StorageChild = {
   id: string;
   name: string;
@@ -39,6 +41,7 @@ type StorageDetail = {
   openSearchCount: number;
   entryCount: number;
   breadcrumb: Breadcrumb[];
+  recipeResources: RecipeResource[];
   children: StorageChild[];
   entries: Entry[];
   availableUsers: Person[];
@@ -120,6 +123,10 @@ function childSummaryParts(child: Pick<StorageChild, "crafterCount" | "totalQty"
   if (child.totalQty > 0) parts.push(`Lager ${child.totalQty}`);
   if (child.openSearchCount > 0) parts.push(`Suche ${child.openSearchCount}`);
   return parts;
+}
+
+function formatResourceQty(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toLocaleString("de-DE", { maximumFractionDigits: 3 });
 }
 
 function ChildBranch({
@@ -233,6 +240,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
   const [entryUserId, setEntryUserId] = useState("");
+  const [entryResources, setEntryResources] = useState<Record<string, { quantity: string; quality: string }>>({});
 
   const [averageQuality, setAverageQuality] = useState("");
   const [requestQty, setRequestQty] = useState(1);
@@ -242,6 +250,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [editingEntryQty, setEditingEntryQty] = useState(1);
   const [editingEntryNote, setEditingEntryNote] = useState("");
+  const [editingEntryResources, setEditingEntryResources] = useState<Record<string, { quantity: string; quality: string }>>({});
   const [targetedRequestEntryId, setTargetedRequestEntryId] = useState<string | null>(null);
 
   const [allItems, setAllItems] = useState<Array<{ id: string; name: string }>>([]);
@@ -256,6 +265,34 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
   const amCrafter = Boolean(blueprintDetail?.crafters.some((crafter) => crafter.userId === meUserId));
   const groupedBadgeDefinitions = useMemo(() => groupBadgeDefinitions(storageDetail?.badgeDefinitions ?? []), [storageDetail?.badgeDefinitions]);
   const scmdbUrl = useMemo(() => scmdbUrlForItemCode(storageDetail?.itemCode), [storageDetail?.itemCode]);
+  const recipeResources = storageDetail?.recipeResources ?? [];
+
+  function resourcePayload(values: Record<string, { quantity: string; quality: string }>) {
+    return Object.entries(values)
+      .map(([resourceId, value]) => ({
+        resourceId,
+        quantity: Number(value.quantity),
+        quality: value.quality.trim() ? Number(value.quality) : null
+      }))
+      .filter((entry) => Number.isFinite(entry.quantity) && entry.quantity > 0);
+  }
+
+  function defaultResourceInputs(resources: RecipeResource[]) {
+    return Object.fromEntries(resources.map((resource) => [
+      resource.resourceId,
+      { quantity: String(resource.quantity), quality: resource.minQuality ? String(resource.minQuality) : "" }
+    ]));
+  }
+
+  function resourceInputsFromEntry(entry: Entry) {
+    if (entry.resources.length > 0) {
+      return Object.fromEntries(entry.resources.map((resource) => [
+        resource.resourceId,
+        { quantity: String(resource.quantity), quality: resource.quality ? String(resource.quality) : "" }
+      ]));
+    }
+    return defaultResourceInputs(recipeResources);
+  }
 
   async function loadAll() {
     setError(null);
@@ -300,6 +337,9 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
     setHideFromBlueprints(storageBody.hideFromBlueprints);
     setCollapsedChildIds(storageBody.children.map((child) => child.id));
     if (!locationId && storageBody.locationFilters[0]) setLocationId(storageBody.locationFilters[0].id);
+    if (Object.keys(entryResources).length === 0 && storageBody.recipeResources.length > 0) {
+      setEntryResources(defaultResourceInputs(storageBody.recipeResources));
+    }
 
     if (listRes?.ok) {
       const listBody = (await listRes.json()) as ListResponse;
@@ -407,7 +447,13 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
       const res = await fetch(`/api/storage/items/${params.id}/entries`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ locationId, qty, note: note || null, userId: canAdmin ? (entryUserId || null) : null })
+        body: JSON.stringify({
+          locationId,
+          qty,
+          note: note || null,
+          userId: canAdmin ? (entryUserId || null) : null,
+          resources: resourcePayload(entryResources)
+        })
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -416,6 +462,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
       }
       setQty(1);
       setNote("");
+      setEntryResources(defaultResourceInputs(recipeResources));
       await loadAll();
     } finally {
       setBusy(false);
@@ -429,7 +476,11 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
       const res = await fetch(`/api/storage/entries/${entryId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ qty: editingEntryQty, note: editingEntryNote || null })
+        body: JSON.stringify({
+          qty: editingEntryQty,
+          note: editingEntryNote || null,
+          resources: resourcePayload(editingEntryResources)
+        })
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -440,6 +491,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
       setEditingEntryId(null);
       setEditingEntryQty(1);
       setEditingEntryNote("");
+      setEditingEntryResources({});
     } finally {
       setBusy(false);
     }
@@ -758,6 +810,26 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
           </div>
         ) : null}
         {scmdbUrl ? <div className="qb-inline" style={{ marginTop: 8 }}><a href={scmdbUrl} target="_blank" rel="noreferrer" className="qb-nav-link">SCMDB oeffnen</a></div> : null}
+        {recipeResources.length > 0 ? (
+          <div className="qb-grid" style={{ gap: 8, marginTop: 12 }}>
+            <strong>Crafting-Ressourcen</strong>
+            {recipeResources.map((resource) => (
+              <div key={resource.id} className="qb-inline" style={{ justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                <div>
+                  <a href={`/items/${resource.resourceId}`} className="qb-nav-link">{resource.resourceName}</a>
+                  <div className="qb-muted">
+                    {resource.slotName} · Menge {formatResourceQty(resource.quantity)}
+                    {resource.minQuality ? ` · Min. Qualitaet ${resource.minQuality}` : ""}
+                  </div>
+                  {resource.people.length > 0 ? (
+                    <div className="qb-muted">Im Lager bei {resource.people.map((person) => person.username).join(", ")}</div>
+                  ) : null}
+                </div>
+                <Badge label={`Lager ${resource.totalStoredQty}`} />
+              </div>
+            ))}
+          </div>
+        ) : null}
         {canEdit && storageDetail ? (
           <form className="qb-form" onSubmit={saveItem}>
             <TextInput value={name} onChange={(e) => setName(e.target.value)} required />
@@ -830,6 +902,37 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                   <div className="qb-form" style={{ marginTop: 8 }}>
                     <TextInput type="number" min={1} value={editingEntryQty} onChange={(e) => setEditingEntryQty(Number(e.target.value))} required />
                     <TextInput placeholder="Notiz (optional)" value={editingEntryNote} onChange={(e) => setEditingEntryNote(e.target.value)} />
+                    {recipeResources.length > 0 ? (
+                      <div className="qb-grid" style={{ gap: 8 }}>
+                        <strong>Verwendete Ressourcen</strong>
+                        {recipeResources.map((resource) => {
+                          const value = editingEntryResources[resource.resourceId] ?? { quantity: "", quality: "" };
+                          return (
+                            <div key={`${entry.id}-${resource.resourceId}`} className="qb-grid" style={{ gap: 6 }}>
+                              <a href={`/items/${resource.resourceId}`} className="qb-nav-link">{resource.resourceName}</a>
+                              <div className="qb-inline" style={{ gap: 8 }}>
+                                <TextInput
+                                  type="number"
+                                  min={0}
+                                  step="0.001"
+                                  placeholder={`Menge ${formatResourceQty(resource.quantity)}`}
+                                  value={value.quantity}
+                                  onChange={(e) => setEditingEntryResources((current) => ({ ...current, [resource.resourceId]: { ...value, quantity: e.target.value } }))}
+                                />
+                                <TextInput
+                                  type="number"
+                                  min={0}
+                                  max={1000}
+                                  placeholder="Qualitaet"
+                                  value={value.quality}
+                                  onChange={(e) => setEditingEntryResources((current) => ({ ...current, [resource.resourceId]: { ...value, quality: e.target.value } }))}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                     <div className="qb-inline">
                       <Button type="button" variant="primary" onClick={() => void saveEntry(entry.id)} disabled={busy}>
                         {busy ? "Speichert..." : "Aenderung speichern"}
@@ -841,6 +944,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                           setEditingEntryId(null);
                           setEditingEntryQty(1);
                           setEditingEntryNote("");
+                          setEditingEntryResources({});
                         }}
                         disabled={busy}
                       >
@@ -848,7 +952,22 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                       </Button>
                     </div>
                   </div>
-                ) : entry.note ? <div className="qb-muted">{entry.note}</div> : null}
+                ) : (
+                  <>
+                    {entry.note ? <div className="qb-muted">{entry.note}</div> : null}
+                    {entry.resources.length > 0 ? (
+                      <div className="qb-grid" style={{ gap: 4, marginTop: 8 }}>
+                        {entry.resources.map((resource) => (
+                          <div key={resource.id} className="qb-muted">
+                            <a href={`/items/${resource.resourceId}`} className="qb-nav-link">{resource.resourceName}</a>
+                            {" "}· {formatResourceQty(resource.quantity)}
+                            {resource.quality ? ` · Q${resource.quality}` : ""}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                )}
                 <div className="qb-inline">
                   {(canAdmin || entry.userId === meUserId) ? (
                     <>
@@ -859,6 +978,7 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
                           setEditingEntryId(entry.id);
                           setEditingEntryQty(entry.qty);
                           setEditingEntryNote(entry.note ?? "");
+                          setEditingEntryResources(resourceInputsFromEntry(entry));
                         }}
                         disabled={busy}
                       >
@@ -895,6 +1015,38 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
             </SelectInput>
             <TextInput type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} required />
             <TextInput placeholder="Notiz (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+            {recipeResources.length > 0 ? (
+              <div className="qb-grid" style={{ gap: 8 }}>
+                <strong>Verwendete Ressourcen</strong>
+                {recipeResources.map((resource) => {
+                  const value = entryResources[resource.resourceId] ?? { quantity: String(resource.quantity), quality: resource.minQuality ? String(resource.minQuality) : "" };
+                  return (
+                    <div key={`new-${resource.resourceId}`} className="qb-grid" style={{ gap: 6 }}>
+                      <a href={`/items/${resource.resourceId}`} className="qb-nav-link">{resource.resourceName}</a>
+                      <div className="qb-muted">{resource.slotName} · Vorgabe {formatResourceQty(resource.quantity)}</div>
+                      <div className="qb-inline" style={{ gap: 8 }}>
+                        <TextInput
+                          type="number"
+                          min={0}
+                          step="0.001"
+                          placeholder="Menge"
+                          value={value.quantity}
+                          onChange={(e) => setEntryResources((current) => ({ ...current, [resource.resourceId]: { ...value, quantity: e.target.value } }))}
+                        />
+                        <TextInput
+                          type="number"
+                          min={0}
+                          max={1000}
+                          placeholder="Qualitaet"
+                          value={value.quality}
+                          onChange={(e) => setEntryResources((current) => ({ ...current, [resource.resourceId]: { ...value, quality: e.target.value } }))}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
             <Button type="submit" variant="primary" disabled={busy}>{busy ? "Speichert..." : "Lager-Eintrag speichern"}</Button>
           </form>
         ) : null}

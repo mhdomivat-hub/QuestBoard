@@ -42,6 +42,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateStorageLocation())
     app.migrations.add(CreateStorageEntry())
     app.migrations.add(MigrateStorageItemsToBlueprintItems())
+    app.migrations.add(CreateBlueprintRecipeResource())
+    app.migrations.add(CreateStorageEntryResourceUsage())
     app.migrations.add(CreateItemSearchRequest())
     app.migrations.add(AddItemSearchRequestQtyField())
     app.migrations.add(AddItemSearchRequestHasResources())

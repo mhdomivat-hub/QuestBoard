@@ -496,6 +496,9 @@ export default function ItemsPage() {
   const [resourcesOnly, setResourcesOnly] = useState(false);
   const [wantedAndCraftableOnly, setWantedAndCraftableOnly] = useState(false);
   const [ownInventoryOnly, setOwnInventoryOnly] = useState(false);
+  const [detailedFiltersCollapsed, setDetailedFiltersCollapsed] = useState(true);
+  const [collapsedFilterBadgeGroups, setCollapsedFilterBadgeGroups] = useState<string[]>([]);
+  const [defaultCollapsedFilterBadgeGroupsApplied, setDefaultCollapsedFilterBadgeGroupsApplied] = useState(false);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -518,6 +521,7 @@ export default function ItemsPage() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<SCMDBImportResult | null>(null);
   const [collapsedBadgeGroups, setCollapsedBadgeGroups] = useState<string[]>([]);
+  const [defaultCollapsedBadgeGroupsApplied, setDefaultCollapsedBadgeGroupsApplied] = useState(false);
   const [adminSectionCollapsed, setAdminSectionCollapsed] = useState(true);
 
   const canEdit = role !== null && role !== "guest";
@@ -569,6 +573,18 @@ export default function ItemsPage() {
     setCollapsedItemIds(collectCollapsedItemIdsBeyondDepth(data.items));
     setDefaultCollapsedItemsApplied(true);
   }, [data, defaultCollapsedItemsApplied]);
+
+  useEffect(() => {
+    if (defaultCollapsedFilterBadgeGroupsApplied || groupedBadgeDefinitions.length === 0) return;
+    setCollapsedFilterBadgeGroups(groupedBadgeDefinitions.map((group) => group.groupName));
+    setDefaultCollapsedFilterBadgeGroupsApplied(true);
+  }, [groupedBadgeDefinitions, defaultCollapsedFilterBadgeGroupsApplied]);
+
+  useEffect(() => {
+    if (defaultCollapsedBadgeGroupsApplied || groupedBadgeDefinitions.length === 0) return;
+    setCollapsedBadgeGroups(groupedBadgeDefinitions.map((group) => group.groupName));
+    setDefaultCollapsedBadgeGroupsApplied(true);
+  }, [groupedBadgeDefinitions, defaultCollapsedBadgeGroupsApplied]);
 
   useEffect(() => {
     if (!moveOwnInventoryLocationId && data?.locationFilters[0]) {
@@ -1014,34 +1030,46 @@ export default function ItemsPage() {
           </Button>
         </div>
         <div className="qb-grid" style={{ gap: 10 }}>
-          {groupedBadgeDefinitions.length === 0 ? (
-            <p className="qb-muted">Noch keine Badges vorhanden.</p>
-          ) : groupedBadgeDefinitions.map((group) => (
-            <div key={group.groupName} className="qb-grid" style={{ gap: 6 }}>
-              <button
-                type="button"
-                className="qb-nav-link"
-                onClick={() => setCollapsedBadgeGroups((current) => toggleValue(current, group.groupName))}
-                style={{ textAlign: "left", padding: 0, background: "none", border: "none", cursor: "pointer" }}
-              >
-                <strong>{collapsedBadgeGroups.includes(group.groupName) ? "+ " : "- "}{group.groupName}</strong>
-              </button>
-              {!collapsedBadgeGroups.includes(group.groupName) ? (
-                <div className="qb-inline">
-                  {group.badges.map((badge) => (
-                    <Button
-                      key={badge.name}
-                      type="button"
-                      variant={activeBadges.includes(badge.name) ? "primary" : "secondary"}
-                      onClick={() => setActiveBadges((current) => toggleValue(current, badge.name))}
-                    >
-                      {badge.name}
-                    </Button>
-                  ))}
+          <button
+            type="button"
+            className="qb-nav-link"
+            onClick={() => setDetailedFiltersCollapsed((value) => !value)}
+            style={{ textAlign: "left", padding: 0, background: "none", border: "none", cursor: "pointer" }}
+          >
+            <strong>{detailedFiltersCollapsed ? "+ " : "- "}Detailierte Filter</strong>
+          </button>
+          {!detailedFiltersCollapsed ? (
+            <div className="qb-grid" style={{ gap: 10 }}>
+              {groupedBadgeDefinitions.length === 0 ? (
+                <p className="qb-muted">Noch keine Badges vorhanden.</p>
+              ) : groupedBadgeDefinitions.map((group) => (
+                <div key={group.groupName} className="qb-grid" style={{ gap: 6 }}>
+                  <button
+                    type="button"
+                    className="qb-nav-link"
+                    onClick={() => setCollapsedFilterBadgeGroups((current) => toggleValue(current, group.groupName))}
+                    style={{ textAlign: "left", padding: 0, background: "none", border: "none", cursor: "pointer" }}
+                  >
+                    <strong>{collapsedFilterBadgeGroups.includes(group.groupName) ? "+ " : "- "}{group.groupName}</strong>
+                  </button>
+                  {!collapsedFilterBadgeGroups.includes(group.groupName) ? (
+                    <div className="qb-inline">
+                      {group.badges.map((badge) => (
+                        <Button
+                          key={badge.name}
+                          type="button"
+                          variant={activeBadges.includes(badge.name) ? "primary" : "secondary"}
+                          onClick={() => setActiveBadges((current) => toggleValue(current, badge.name))}
+                        >
+                          {badge.name}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
+              ))}
             </div>
-          ))}
+          ) : null}
         </div>
         <div className="qb-grid" style={{ gap: 8 }}>
           <strong>Lagerorte</strong>
