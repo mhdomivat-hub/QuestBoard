@@ -1346,8 +1346,8 @@ export default function ItemsPage() {
                       <p className="qb-muted">Noch keine Badges angelegt.</p>
                     ) : groupedBadgeDefinitions.map((group) => (
                       (() => {
-                        const hideGroupChildrenDuringDrag = badgeEditMode && draggedBadgeName !== null;
-                        const showGroupChildren = !collapsedBadgeGroups.includes(group.groupName) && !hideGroupChildrenDuringDrag;
+                        const isDraggingBadge = badgeEditMode && draggedBadgeName !== null;
+                        const showGroupChildren = !collapsedBadgeGroups.includes(group.groupName);
                         return (
                       <div
                         key={group.groupName}
@@ -1382,12 +1382,19 @@ export default function ItemsPage() {
                           </Button>
                         </div>
                         {showGroupChildren ? group.badges.map((badge) => {
+                          const isHiddenDuringDrag = isDraggingBadge && badge.name !== draggedBadgeName;
                           const isEditing = editingBadgeName === badge.name;
                           return (
                             <div
                               key={badge.name}
                               className={`qb-inline${badgeEditMode ? " qb-badge-admin-row" : ""}`}
-                              style={{ justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}
+                              style={{
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                gap: 12,
+                                flexWrap: "wrap",
+                                display: isHiddenDuringDrag ? "none" : undefined
+                              }}
                               draggable={badgeEditMode && !isEditing}
                               onDragStart={() => {
                                 if (badgeEditMode && !isEditing) setDraggedBadgeName(badge.name);
