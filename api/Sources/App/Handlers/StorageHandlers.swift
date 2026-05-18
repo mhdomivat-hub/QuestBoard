@@ -108,12 +108,15 @@ private func sanitizeItemBadgeName(_ raw: String) throws -> String {
 private func sanitizeItemBadgeGroupName(_ raw: String?) -> String? {
     let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !trimmed.isEmpty else { return nil }
+    if trimmed.caseInsensitiveCompare("Ohne Gruppe") == .orderedSame {
+        return nil
+    }
     return String(trimmed.prefix(40))
 }
 
 private func badgeGroupMatches(_ definition: ItemBadgeDefinition, groupName: String?) -> Bool {
-    let normalizedLeft = definition.groupName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    let normalizedRight = groupName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    let normalizedLeft = sanitizeItemBadgeGroupName(definition.groupName)?.lowercased() ?? ""
+    let normalizedRight = sanitizeItemBadgeGroupName(groupName)?.lowercased() ?? ""
     return normalizedLeft == normalizedRight
 }
 
@@ -731,8 +734,29 @@ func deleteStorageItem(_ req: Request) async throws -> HTTPStatus {
         throw Abort(.notFound)
     }
     let itemId = try item.requireID()
+    let reparentChildrenToParent = (try? req.query.get(Bool.self, at: "reparentChildrenToParent")) ?? false
+
+    if reparentChildrenToParent {
+        let directChildren = try await Blueprint.query(on: req.db)
+            .filter(\.$parent.$id == itemId)
+            .all()
+
+        for child in directChildren {
+            child.$parent.id = item.$parent.id
+            try await child.save(on: req.db)
+        }
+    }
+
     try await item.delete(on: req.db)
-    await recordAuditEvent(on: req, actor: actor, action: "storage.item.delete", entityType: "storage_item", entityId: itemId)
+    let childReparentDetails = reparentChildrenToParent ? "reparentChildrenToParent=true" : "reparentChildrenToParent=false"
+    await recordAuditEvent(
+        on: req,
+        actor: actor,
+        action: "storage.item.delete",
+        entityType: "storage_item",
+        entityId: itemId,
+        details: childReparentDetails
+    )
     return .noContent
 }
 

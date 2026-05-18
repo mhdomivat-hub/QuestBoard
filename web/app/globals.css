@@ -35,7 +35,7 @@ a:hover {
 }
 
 .qb-shell {
-  max-width: 1200px;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -43,6 +43,140 @@ a:hover {
 .qb-main {
   display: grid;
   gap: 14px;
+}
+
+.qb-items-page {
+  position: relative;
+}
+
+.qb-items-layout {
+  display: block;
+}
+
+.qb-items-sidebar {
+  position: fixed;
+  top: 104px;
+  left: max(16px, calc(50vw - 704px));
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  z-index: 5;
+}
+
+.qb-items-sidebar-scroll {
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.qb-items-content {
+  display: grid;
+  gap: 14px;
+  padding-left: 432px;
+}
+
+.qb-items-heading {
+  display: grid;
+  gap: 6px;
+}
+
+.qb-page-title {
+  margin: 0;
+}
+
+.qb-item-branch-path {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-silver);
+}
+
+.qb-item-branch-path a {
+  color: var(--text-silver);
+}
+
+.qb-item-branch-path a:hover {
+  color: var(--text-silver);
+}
+
+.qb-item-branch-separator {
+  display: inline-block;
+  margin: 0 6px 0 2px;
+  color: rgba(201, 162, 77, 0.75);
+}
+
+.qb-filter-section {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(199, 205, 214, 0.12);
+}
+
+.qb-filter-section-header {
+  display: grid;
+  gap: 4px;
+}
+
+.qb-filter-section-title {
+  margin: 0;
+  font-size: 16px;
+}
+
+.qb-filter-group-toggle {
+  text-align: left;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  border: none;
+}
+
+.qb-badge-drop-zone {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px dashed rgba(199, 205, 214, 0.28);
+  border-radius: 10px;
+  background: rgba(26, 31, 38, 0.55);
+}
+
+.qb-badge-drop-zone.is-active {
+  border-color: rgba(201, 162, 77, 0.7);
+  box-shadow: 0 0 0 1px rgba(201, 162, 77, 0.22);
+}
+
+.qb-badge-group-card {
+  padding: 12px;
+  border: 1px dashed rgba(199, 205, 214, 0.22);
+  border-radius: 10px;
+}
+
+.qb-badge-admin-row {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed rgba(199, 205, 214, 0.16);
+}
+
+.qb-badge-admin-chip {
+  cursor: grab;
+}
+
+html[data-qb-mobile-version="on"] .qb-items-sidebar {
+  position: static;
+  width: auto;
+  max-width: none;
+}
+
+html[data-qb-mobile-version="on"] .qb-items-sidebar-scroll {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+html[data-qb-mobile-version="on"] .qb-items-content {
+  padding-left: 0;
 }
 
 .qb-nav {
@@ -255,3 +389,5 @@ a:hover {
     padding: 14px;
   }
 }
+
+

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://api:8080";
 const COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "qb_token";
+export const dynamic = "force-dynamic";
 
 async function forward(method: "POST" | "PATCH" | "DELETE", req: Request) {
   const token = cookies().get(COOKIE_NAME)?.value;
@@ -21,7 +22,10 @@ async function forward(method: "POST" | "PATCH" | "DELETE", req: Request) {
   const text = await res.text();
   return new NextResponse(text, {
     status: res.status,
-    headers: { "Content-Type": "application/json" }
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "private, no-cache, no-store, must-revalidate"
+    }
   });
 }
 

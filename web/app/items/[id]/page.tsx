@@ -714,10 +714,19 @@ export default function ItemDetailPage({ params }: { params: { id: string } }) {
 
   async function deleteItem() {
     if (!storageDetail || !window.confirm(`Eintrag "${storageDetail.name}" wirklich komplett loeschen?`)) return;
+    let reparentChildrenToParent = false;
+    if (storageDetail.children.length > 0) {
+      const childLabel = `${storageDetail.children.length} Unterpunkt${storageDetail.children.length === 1 ? "" : "e"}`;
+      reparentChildrenToParent = storageDetail.parentId
+        ? window.confirm(`Sollen ${childLabel} an den Oberpunkt von "${storageDetail.name}" gehaengt werden?`)
+        : window.confirm(`Sollen ${childLabel} als neue Oberpunkte erhalten bleiben?`);
+    }
+
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/storage/items/${storageDetail.id}`, { method: "DELETE" });
+      const query = reparentChildrenToParent ? "?reparentChildrenToParent=true" : "";
+      const res = await fetch(`/api/storage/items/${storageDetail.id}${query}`, { method: "DELETE" });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         setError(`Item loeschen fehlgeschlagen (${res.status}) ${text}`);

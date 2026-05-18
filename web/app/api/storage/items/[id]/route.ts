@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://api:8080";
 const COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "qb_token";
+export const dynamic = "force-dynamic";
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const token = cookies().get(COOKIE_NAME)?.value;
@@ -12,7 +13,13 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     cache: "no-store"
   });
   const text = await res.text();
-  return new NextResponse(text, { status: res.status, headers: { "Content-Type": "application/json" } });
+  return new NextResponse(text, {
+    status: res.status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "private, no-cache, no-store, must-revalidate"
+    }
+  });
 }
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
@@ -25,7 +32,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     body: JSON.stringify(payload)
   });
   const text = await res.text();
-  return new NextResponse(text, { status: res.status, headers: { "Content-Type": "application/json" } });
+  return new NextResponse(text, {
+    status: res.status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "private, no-cache, no-store, must-revalidate"
+    }
+  });
 }
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
@@ -36,5 +49,11 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
     headers: { Authorization: `Bearer ${token}` }
   });
   const text = await res.text();
-  return new NextResponse(text, { status: res.status, headers: { "Content-Type": text ? "application/json" : "text/plain" } });
+  return new NextResponse(text, {
+    status: res.status,
+    headers: {
+      "Content-Type": text ? "application/json" : "text/plain",
+      "Cache-Control": "private, no-cache, no-store, must-revalidate"
+    }
+  });
 }

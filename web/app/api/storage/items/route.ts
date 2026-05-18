@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://api:8080";
 const COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "qb_token";
+export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const token = cookies().get(COOKIE_NAME)?.value;
@@ -22,7 +23,7 @@ export async function GET(req: Request) {
       status: 304,
       headers: {
         ETag: etag,
-        "Cache-Control": "private, max-age=30, stale-while-revalidate=120",
+        "Cache-Control": "private, no-cache, must-revalidate",
         Vary: "Cookie, Accept-Encoding"
       }
     });
@@ -33,7 +34,7 @@ export async function GET(req: Request) {
     headers: {
       "Content-Type": "application/json",
       ETag: etag,
-      "Cache-Control": "private, max-age=30, stale-while-revalidate=120",
+      "Cache-Control": "private, no-cache, must-revalidate",
       Vary: "Cookie, Accept-Encoding"
     }
   });
@@ -51,5 +52,11 @@ export async function POST(req: Request) {
   });
 
   const text = await res.text();
-  return new NextResponse(text, { status: res.status, headers: { "Content-Type": "application/json" } });
+  return new NextResponse(text, {
+    status: res.status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "private, no-cache, no-store, must-revalidate"
+    }
+  });
 }

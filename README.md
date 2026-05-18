@@ -215,6 +215,31 @@ Danach neu starten:
 docker compose -f /opt/questboard/docker-compose.yml up -d --build
 ~~~
 
+## SCMDB-Snapshot aktualisieren
+
+PowerShell unter Windows:
+
+~~~powershell
+./scripts/fetch-scmdb-snapshot.ps1
+~~~
+
+Bash unter Linux/macOS:
+
+~~~bash
+chmod +x scripts/fetch-scmdb-snapshot.sh
+./scripts/fetch-scmdb-snapshot.sh
+~~~
+
+Optional koennen Base-URL und Zieldatei ueberschrieben werden:
+
+~~~bash
+./scripts/fetch-scmdb-snapshot.sh https://scmdb.net api/SCMDBSnapshot/scmdb-fabricator-snapshot.json
+~~~
+
+Voraussetzungen fuer die Bash-Variante:
+- `curl`
+- `python3`
+
 ## Welche Loesung wann?
 
 - `docker-compose.yml`
