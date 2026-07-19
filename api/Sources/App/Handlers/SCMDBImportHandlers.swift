@@ -146,7 +146,13 @@ private func fetchRemoteData(from urlString: String, req: Request, context: Stri
     }
 
     do {
-        let data = try Data(contentsOf: url)
+        let response = try await req.client.get(URI(string: url.absoluteString))
+        guard response.status == .ok else {
+            req.logger.error("\(context) returned status \(response.status.code)")
+            throw Abort(.badGateway, reason: "\(context) lieferte Status \(response.status.code)")
+        }
+
+        let data = response.body.map { Data(buffer: $0) } ?? Data()
         guard !data.isEmpty else {
             req.logger.error("\(context) returned empty body")
             throw Abort(.badGateway, reason: "\(context) lieferte keine Daten")
