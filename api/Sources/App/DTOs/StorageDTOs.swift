@@ -21,6 +21,27 @@ struct ItemBadgeDefinitionDeleteDTO: Content {
     let groupName: String?
 }
 
+struct MiningModuleBackupDTO: Content {
+    let id: UUID
+    let name: String
+    let moduleType: LoadoutBackupModuleType
+}
+
+struct MiningModuleBackupCreateDTO: Content {
+    let name: String
+    let moduleType: LoadoutBackupModuleType
+}
+
+struct MiningModuleBackupUpdateDTO: Content {
+    let id: UUID
+    let name: String
+    let moduleType: LoadoutBackupModuleType
+}
+
+struct MiningModuleBackupDeleteDTO: Content {
+    let id: UUID
+}
+
 struct StorageLocationCreateDTO: Content {
     let parentId: UUID?
     let name: String
@@ -167,6 +188,7 @@ struct StorageListResponseDTO: Content {
     let items: [StorageItemTreeNodeDTO]
     let availableBadges: [String]
     let badgeDefinitions: [ItemBadgeDefinitionDTO]
+    let backupMiningModules: [MiningModuleBackupDTO]
     let availableUsers: [StoragePersonDTO]
     let locations: [StorageLocationNodeDTO]
     let locationFilters: [StorageLocationFilterDTO]

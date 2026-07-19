@@ -175,13 +175,37 @@ private func dataByRemovingUTF8BOM(_ data: Data) -> Data {
     return Data(data.dropFirst(bom.count))
 }
 
-private func loadSCMDBSourceData(req: Request, sourceBaseURL: String) async throws -> (version: String, craftingBlueprints: SCMDBCraftingBlueprintsPayload, craftingItems: SCMDBCraftingItemsPayload, sourceLabel: String) {
-    if FileManager.default.fileExists(atPath: localSCMDBSnapshotPath) {
+private func writeSCMDBSnapshot(version: String, sourceBaseURL: String, craftingBlueprints: SCMDBCraftingBlueprintsPayload, craftingItems: SCMDBCraftingItemsPayload, req: Request) -> Bool {
+    let snapshot = SCMDBLocalSnapshot(
+        sourceBaseURL: sourceBaseURL,
+        version: version,
+        fetchedAt: ISO8601DateFormatter().string(from: Date()),
+        craftingBlueprints: craftingBlueprints,
+        craftingItems: craftingItems
+    )
+
+    do {
+        let url = URL(fileURLWithPath: localSCMDBSnapshotPath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(snapshot)
+        try data.write(to: url, options: .atomic)
+        return true
+    } catch {
+        req.logger.warning("SCMDB snapshot write failed: \(error.localizedDescription)")
+        return false
+    }
+}
+
+private func loadSCMDBSourceData(req: Request, sourceBaseURL: String, sourceMode: String?, updateSnapshot: Bool) async throws -> (version: String, craftingBlueprints: SCMDBCraftingBlueprintsPayload, craftingItems: SCMDBCraftingItemsPayload, sourceLabel: String, snapshotUpdated: Bool) {
+    let normalizedMode = sourceMode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let preferLive = normalizedMode == "live"
+
+    if !preferLive && FileManager.default.fileExists(atPath: localSCMDBSnapshotPath) {
         do {
             let snapshotData = try Data(contentsOf: URL(fileURLWithPath: localSCMDBSnapshotPath))
             let snapshot = try JSONDecoder().decode(SCMDBLocalSnapshot.self, from: dataByRemovingUTF8BOM(snapshotData))
             req.logger.info("Using local SCMDB snapshot at \(localSCMDBSnapshotPath)")
-            return (snapshot.version, snapshot.craftingBlueprints, snapshot.craftingItems, "snapshot")
+            return (snapshot.version, snapshot.craftingBlueprints, snapshot.craftingItems, "snapshot", false)
         } catch {
             req.logger.warning("Local SCMDB snapshot unreadable, falling back to live source: \(error.localizedDescription)")
         }
@@ -217,7 +241,9 @@ private func loadSCMDBSourceData(req: Request, sourceBaseURL: String) async thro
         context: "SCMDB crafting items"
     )
 
-    return (selectedVersion.version, craftingBlueprintsPayload, craftingItemsPayload, "live")
+    let snapshotUpdated = updateSnapshot ? writeSCMDBSnapshot(version: selectedVersion.version, sourceBaseURL: sourceBaseURL, craftingBlueprints: craftingBlueprintsPayload, craftingItems: craftingItemsPayload, req: req) : false
+
+    return (selectedVersion.version, craftingBlueprintsPayload, craftingItemsPayload, "live", snapshotUpdated)
 }
 
 private func scmdbLookupKey(parentId: UUID?, name: String) -> String {
@@ -664,14 +690,24 @@ private func collectRecipeResources(from blueprint: SCMDBCraftingBlueprint) -> [
     for tier in blueprint.tiers {
         for slot in tier.slots {
             let slotName = slot.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-            for option in slot.options where option.type.lowercased() == "resource" {
-                guard let resourceName = option.resourceName?.trimmingCharacters(in: .whitespacesAndNewlines),
-                      !resourceName.isEmpty else {
+            for option in slot.options {
+                let optionType = option.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let materialName: String?
+                if optionType == "resource" {
+                    materialName = option.resourceName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                } else if optionType == "item" {
+                    materialName = option.itemName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                } else {
+                    materialName = nil
+                }
+
+                guard let materialName, !materialName.isEmpty else {
                     continue
                 }
+
                 result.append(.init(
                     slotName: slotName?.isEmpty == false ? slotName! : "Material",
-                    resourceName: resourceName,
+                    resourceName: materialName,
                     quantity: option.quantity ?? 0,
                     minQuality: option.minQuality
                 ))
@@ -984,7 +1020,8 @@ func importSCMDBItems(_ req: Request) async throws -> SCMDBImportResultDTO {
     let payload = try req.content.decode(SCMDBImportRequestDTO.self)
     let dryRun = payload.dryRun ?? false
     let sourceBaseURL = try normalizeSCMDBBaseURL(payload.sourceBaseURL)
-    let sourceData = try await loadSCMDBSourceData(req: req, sourceBaseURL: sourceBaseURL)
+    let updateSnapshot = payload.updateSnapshot ?? false
+    let sourceData = try await loadSCMDBSourceData(req: req, sourceBaseURL: sourceBaseURL, sourceMode: payload.sourceMode, updateSnapshot: updateSnapshot)
 
     let itemMapByEntityClass = buildSCMDBCraftingItemIndex(from: sourceData.craftingItems.items)
     let craftingEntries = buildCraftingEntries(
@@ -1267,6 +1304,8 @@ func importSCMDBItems(_ req: Request) async throws -> SCMDBImportResultDTO {
     return .init(
         sourceBaseURL: sourceBaseURL,
         version: sourceData.version,
+        sourceLabel: sourceData.sourceLabel,
+        snapshotUpdated: sourceData.snapshotUpdated,
         totalDiscovered: craftingEntries.count + resourceEntries.count,
         sectionCounts: [
             scmdbSectionWeapons: craftingEntries.filter { $0.section == scmdbSectionWeapons }.count,
@@ -1283,3 +1322,8 @@ func importSCMDBItems(_ req: Request) async throws -> SCMDBImportResultDTO {
         preview: Array(preview)
     )
 }
+
+
+
+
+

@@ -38,6 +38,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(AddBlueprintItemCodeField())
     app.migrations.add(AddBlueprintHideFromBlueprintsField())
     app.migrations.add(CreateItemBadgeDefinition())
+    app.migrations.add(CreateMiningModuleBackupDefinition())
+    app.migrations.add(AddModuleTypeToMiningModuleBackupDefinition())
     app.migrations.add(CreateBlueprintCrafter())
     app.migrations.add(CreateStorageLocation())
     app.migrations.add(CreateStorageEntry())
@@ -52,6 +54,12 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateQuestTemplate())
     app.migrations.add(CreateQuestTemplateRequirement())
 
+    app.migrations.add(CreateLoadout())
+    app.migrations.add(AddLoadoutPatchVersion())
+    app.migrations.add(CreateLoadoutItemMaterialTarget())
+    app.migrations.add(CreateLoadoutItemModuleAssignment())
+    app.migrations.add(AddBackupMiningModuleSupportToLoadoutAssignments())
+
     try app.autoMigrate().wait()
     try app.eventLoopGroup.next().makeFutureWithTask {
         try await bootstrapInitialAdmin(app)
@@ -59,4 +67,12 @@ public func configure(_ app: Application) throws {
 
     try routes(app)
 }
+
+
+
+
+
+
+
+
 

@@ -64,6 +64,15 @@ public func routes(_ app: Application) throws {
     authed.patch("contributions", ":contributionID", use: updateContribution)
     authed.patch("contributions", ":contributionID", "status", use: updateContributionStatus)
 
+    authed.get("loadouts", use: listLoadouts)
+    authed.post("loadouts", use: createLoadout)
+    authed.get("loadouts", ":loadoutID", use: getLoadout)
+    authed.patch("loadouts", ":loadoutID", use: updateLoadout)
+    authed.delete("loadouts", ":loadoutID", use: deleteLoadout)
+    authed.post("loadouts", ":loadoutID", "items", use: addLoadoutItem)
+    authed.patch("loadouts", ":loadoutID", "items", ":loadoutItemID", use: updateLoadoutItem)
+    authed.delete("loadouts", ":loadoutID", "items", ":loadoutItemID", use: deleteLoadoutItem)
+
     authed.group("admin") { admin in
         admin.get("password-resets", "pending", use: listPendingPasswordResets)
         admin.post("password-resets", ":requestID", "approve", use: approvePasswordReset)
@@ -98,5 +107,14 @@ public func routes(_ app: Application) throws {
         admin.post("items", "badges", use: createItemBadgeDefinition)
         admin.patch("items", "badges", use: updateItemBadgeDefinition)
         admin.delete("items", "badges", use: deleteItemBadgeDefinition)
+        admin.get("items", "mining-modules", use: listMiningModuleBackups)
+        admin.post("items", "mining-modules", use: createMiningModuleBackup)
+        admin.patch("items", "mining-modules", use: updateMiningModuleBackup)
+        admin.delete("items", "mining-modules", use: deleteMiningModuleBackup)
     }
 }
+
+
+
+
+

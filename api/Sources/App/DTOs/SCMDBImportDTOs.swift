@@ -3,6 +3,8 @@ import Vapor
 struct SCMDBImportRequestDTO: Content {
     let sourceBaseURL: String?
     let dryRun: Bool?
+    let sourceMode: String?
+    let updateSnapshot: Bool?
 }
 
 struct SCMDBImportPreviewItemDTO: Content {
@@ -13,6 +15,8 @@ struct SCMDBImportPreviewItemDTO: Content {
 struct SCMDBImportResultDTO: Content {
     let sourceBaseURL: String
     let version: String
+    let sourceLabel: String
+    let snapshotUpdated: Bool
     let totalDiscovered: Int
     let sectionCounts: [String: Int]
     let inserted: Int

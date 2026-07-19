@@ -114,6 +114,27 @@ private func sanitizeItemBadgeGroupName(_ raw: String?) -> String? {
     return String(trimmed.prefix(40))
 }
 
+private func sanitizeMiningModuleBackupName(_ raw: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw Abort(.badRequest, reason: "Module name required")
+    }
+    return String(trimmed.prefix(80))
+}
+
+private func buildMiningModuleBackupDTOs(_ definitions: [MiningModuleBackupDefinition]) -> [MiningModuleBackupDTO] {
+    definitions
+        .compactMap { definition in
+            definition.id.map { MiningModuleBackupDTO(id: $0, name: definition.name, moduleType: definition.moduleType) }
+        }
+        .sorted { left, right in
+            if left.moduleType == right.moduleType {
+                return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
+            }
+            return left.moduleType.rawValue.localizedCaseInsensitiveCompare(right.moduleType.rawValue) == .orderedAscending
+        }
+}
+
 private func badgeGroupMatches(_ definition: ItemBadgeDefinition, groupName: String?) -> Bool {
     let normalizedLeft = sanitizeItemBadgeGroupName(definition.groupName)?.lowercased() ?? ""
     let normalizedRight = sanitizeItemBadgeGroupName(groupName)?.lowercased() ?? ""
@@ -179,7 +200,6 @@ private func buildLocationTree(parentId: UUID?, grouped: [UUID?: [StorageLocatio
         )
     }
 }
-
 private func locationFilters(from locations: [StorageLocation]) -> [StorageLocationFilterDTO] {
     let byId = Dictionary(uniqueKeysWithValues: locations.compactMap { location in
         location.id.map { ($0, location) }
@@ -452,7 +472,6 @@ private func buildItemTree(
         )
     }
 }
-
 private func storageItemDetail(
     item: Blueprint,
     allItems: [Blueprint],
@@ -491,13 +510,12 @@ private func storageItemDetail(
         itemsById[id].map { StorageBreadcrumbItemDTO(id: id, name: $0.name) }
     } + [StorageBreadcrumbItemDTO(id: itemId, name: item.name)]
 
-    let entryDtos = entryDTOs(
+    let itemEntryDtos = entryDTOs(
         entries: entries.filter { $0.$item.id == itemId },
         usersById: usersById,
         locationsById: locationsById,
         usagesByEntryId: usagesByEntryId
     )
-    let entriesByItemId = Dictionary(grouping: entries, by: { $0.$item.id })
     let recipeDTOs = buildStorageRecipeResourceDTOs(
         itemId: itemId,
         recipeResources: recipeResources,
@@ -510,10 +528,9 @@ private func storageItemDetail(
         return try children.map { child in
             guard let childId = child.id else { throw Abort(.internalServerError) }
             let nestedChildren = try buildChildSummaries(parentId: childId)
-            let ownEntries = entriesByItemId[childId] ?? []
+            let ownEntries = entryDTOs(entries: entries.filter { $0.$item.id == childId }, usersById: usersById, locationsById: locationsById, usagesByEntryId: usagesByEntryId)
             let ownQty = ownEntries.reduce(0) { $0 + $1.qty }
             let ownEntryCount = ownEntries.count
-
             return .init(
                 id: childId,
                 name: child.name,
@@ -532,8 +549,8 @@ private func storageItemDetail(
     let childSummaries = try buildChildSummaries(parentId: itemId)
     let ownCrafterCount = crafterCountsByItem[itemId] ?? 0
     let ownOpenSearchCount = openSearchCountsByItem[itemId] ?? 0
-    let ownEntryCount = entryDtos.count
-    let ownTotalQty = entryDtos.reduce(0) { $0 + $1.qty }
+    let ownEntryCount = itemEntryDtos.count
+    let ownTotalQty = itemEntryDtos.reduce(0) { $0 + $1.qty }
 
     return .init(
         id: itemId,
@@ -552,13 +569,12 @@ private func storageItemDetail(
         breadcrumb: breadcrumb,
         recipeResources: recipeDTOs,
         children: childSummaries,
-        entries: entryDtos,
+        entries: itemEntryDtos,
         availableUsers: availablePeople(from: users),
         locations: try buildLocationTree(parentId: nil, grouped: groupedLocations),
         locationFilters: locationFilters(from: locations)
     )
 }
-
 func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
     let actor = try requireNonGuestUser(req)
 
@@ -572,6 +588,7 @@ func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
     let crafters = try await BlueprintCrafter.query(on: req.db).all()
     let searchRequests = try await ItemSearchRequest.query(on: req.db).all()
     let badgeDefinitions = try await ItemBadgeDefinition.query(on: req.db).all()
+    let miningModuleBackups = try await MiningModuleBackupDefinition.query(on: req.db).all()
     let badgeDefinitionsDTO = buildBadgeDefinitions(items: items, definitions: badgeDefinitions)
 
     let usersById = Dictionary(uniqueKeysWithValues: users.compactMap { entry in
@@ -619,6 +636,7 @@ func listStorageItems(_ req: Request) async throws -> StorageListResponseDTO {
         items: itemTree,
         availableBadges: availableBadgeNames(from: badgeDefinitionsDTO),
         badgeDefinitions: badgeDefinitionsDTO,
+        backupMiningModules: buildMiningModuleBackupDTOs(miningModuleBackups),
         availableUsers: filteredUsers,
         locations: try buildLocationTree(parentId: nil, grouped: groupedLocations),
         locationFilters: locationFilters(from: locations)
@@ -1227,3 +1245,74 @@ private func getStorageItemById(_ itemId: UUID?, on db: Database) async throws -
         openSearchCountsByItem: Dictionary(grouping: searchRequests.filter { $0.status == .open }, by: { $0.$item.id }).mapValues(\.count)
     )
 }
+
+func listMiningModuleBackups(_ req: Request) async throws -> [MiningModuleBackupDTO] {
+    let actor = try requireAdminOrSuperAdmin(req)
+    _ = actor
+    let definitions = try await MiningModuleBackupDefinition.query(on: req.db).all()
+    return buildMiningModuleBackupDTOs(definitions)
+}
+
+func createMiningModuleBackup(_ req: Request) async throws -> [MiningModuleBackupDTO] {
+    let actor = try requireAdminOrSuperAdmin(req)
+    let body = try req.content.decode(MiningModuleBackupCreateDTO.self)
+    let name = try sanitizeMiningModuleBackupName(body.name)
+
+    let existing = try await MiningModuleBackupDefinition.query(on: req.db).all()
+    guard !existing.contains(where: {
+        $0.name.caseInsensitiveCompare(name) == .orderedSame && $0.moduleType == body.moduleType
+    }) else {
+        throw Abort(.conflict, reason: "Module backup already exists")
+    }
+
+    let definition = MiningModuleBackupDefinition(name: name, moduleType: body.moduleType)
+    try await definition.save(on: req.db)
+    await recordAuditEvent(on: req, actor: actor, action: "mining-module-backup.create", entityType: "mining_module_backup", entityId: definition.id, details: "name=\(name);type=\(body.moduleType.rawValue)")
+
+    return buildMiningModuleBackupDTOs(try await MiningModuleBackupDefinition.query(on: req.db).all())
+}
+
+func updateMiningModuleBackup(_ req: Request) async throws -> [MiningModuleBackupDTO] {
+    let actor = try requireAdminOrSuperAdmin(req)
+    let body = try req.content.decode(MiningModuleBackupUpdateDTO.self)
+    let name = try sanitizeMiningModuleBackupName(body.name)
+
+    guard let definition = try await MiningModuleBackupDefinition.find(body.id, on: req.db) else {
+        throw Abort(.notFound)
+    }
+
+    let existing = try await MiningModuleBackupDefinition.query(on: req.db).all()
+    guard !existing.contains(where: {
+        $0.id != body.id && $0.name.caseInsensitiveCompare(name) == .orderedSame && $0.moduleType == body.moduleType
+    }) else {
+        throw Abort(.conflict, reason: "Module backup already exists")
+    }
+
+    let previousName = definition.name
+    let previousType = definition.moduleType
+    definition.name = name
+    definition.moduleType = body.moduleType
+    try await definition.save(on: req.db)
+    await recordAuditEvent(on: req, actor: actor, action: "mining-module-backup.update", entityType: "mining_module_backup", entityId: definition.id, details: "from=\(previousName);to=\(name);fromType=\(previousType.rawValue);toType=\(body.moduleType.rawValue)")
+
+    return buildMiningModuleBackupDTOs(try await MiningModuleBackupDefinition.query(on: req.db).all())
+}
+
+func deleteMiningModuleBackup(_ req: Request) async throws -> [MiningModuleBackupDTO] {
+    let actor = try requireAdminOrSuperAdmin(req)
+    let body = try req.content.decode(MiningModuleBackupDeleteDTO.self)
+
+    guard let definition = try await MiningModuleBackupDefinition.find(body.id, on: req.db) else {
+        throw Abort(.notFound)
+    }
+
+    let name = definition.name
+    try await definition.delete(on: req.db)
+    await recordAuditEvent(on: req, actor: actor, action: "mining-module-backup.delete", entityType: "mining_module_backup", entityId: body.id, details: "name=\(name)")
+
+    return buildMiningModuleBackupDTOs(try await MiningModuleBackupDefinition.query(on: req.db).all())
+}
+
+
+
+

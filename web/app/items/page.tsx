@@ -12,6 +12,7 @@ type LocationFilter = { id: string; label: string };
 type LocationNode = { id: string; parentId?: string | null; name: string; description?: string | null; children: LocationNode[] };
 type BadgeDefinition = { name: string; groupName?: string | null };
 type BadgeDefinitionGroup = { groupName: string; badges: BadgeDefinition[] };
+type BackupMiningModule = { id: string; name: string; moduleType: "MINING_LASER" | "FPS_WEAPON" };
 type Person = { userId: string; username: string };
 type InventoryMatch = {
   requestId: string;
@@ -53,6 +54,7 @@ type ItemsListResponse = {
   items: ItemNode[];
   availableBadges: string[];
   badgeDefinitions: BadgeDefinition[];
+  backupMiningModules: BackupMiningModule[];
   locations: LocationNode[];
   locationFilters: LocationFilter[];
 };
@@ -60,6 +62,8 @@ type ItemsListResponse = {
 type SCMDBImportResult = {
   sourceBaseURL: string;
   version: string;
+  sourceLabel: string;
+  snapshotUpdated: boolean;
   totalDiscovered: number;
   sectionCounts: Record<string, number>;
   inserted: number;
@@ -171,6 +175,10 @@ function collectLocationSubtreeIds(node: LocationNode): string[] {
   return [node.id, ...node.children.flatMap((child) => collectLocationSubtreeIds(child))];
 }
 
+
+function countLeafItemNodes(nodes: ItemNode[]): number {
+  return nodes.reduce((sum, node) => sum + (node.children.length === 0 ? 1 : countLeafItemNodes(node.children)), 0);
+}
 function groupBadgeDefinitions(definitions: BadgeDefinition[]): BadgeDefinitionGroup[] {
   const groups = new Map<string, BadgeDefinition[]>();
   for (const definition of definitions) {
@@ -543,12 +551,20 @@ export default function ItemsPage() {
   const [badgeBusy, setBadgeBusy] = useState<string | null>(null);
   const [badgeEditMode, setBadgeEditMode] = useState(false);
   const [draggedBadgeName, setDraggedBadgeName] = useState<string | null>(null);
+  const [miningModuleName, setMiningModuleName] = useState("");
+  const [editingMiningModuleId, setEditingMiningModuleId] = useState<string | null>(null);
+  const [miningModuleType, setMiningModuleType] = useState<"MINING_LASER" | "FPS_WEAPON">("MINING_LASER");
+  const [editMiningModuleName, setEditMiningModuleName] = useState("");
+  const [editMiningModuleType, setEditMiningModuleType] = useState<"MINING_LASER" | "FPS_WEAPON">("MINING_LASER");
+  const [miningModuleBusy, setMiningModuleBusy] = useState<string | null>(null);
 
   const [locationName, setLocationName] = useState("");
   const [locationDescription, setLocationDescription] = useState("");
   const [locationParentId, setLocationParentId] = useState("");
   const [moveOwnInventoryLocationId, setMoveOwnInventoryLocationId] = useState("");
   const [scmdbSourceURL, setScmdbSourceURL] = useState("https://scmdb.net/?page=fab");
+  const [scmdbSourceMode, setScmdbSourceMode] = useState<"snapshot" | "live">("snapshot");
+  const [scmdbUpdateSnapshot, setScmdbUpdateSnapshot] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<SCMDBImportResult | null>(null);
@@ -827,7 +843,7 @@ export default function ItemsPage() {
     }
   }
 
-  async function runSCMDBImport(dryRun: boolean) {
+  async function runSCMDBImport(dryRun: boolean, sourceMode: "live" | "default" = "live") {
     setImportBusy(true);
     setImportError(null);
     setImportResult(null);
@@ -837,7 +853,8 @@ export default function ItemsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sourceBaseURL: scmdbSourceURL || null,
-          dryRun
+          dryRun,
+          sourceMode
         })
       });
 
@@ -996,6 +1013,102 @@ export default function ItemsPage() {
     }
   }
 
+
+  async function createMiningModuleBackup(e: FormEvent) {
+    e.preventDefault();
+    setMiningModuleBusy("create");
+    setError(null);
+    try {
+      const moduleNames = Array.from(
+        new Set(
+          miningModuleName
+            .split(/[;,\n]/)
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0)
+        )
+      );
+      if (moduleNames.length === 0) {
+        setError("Bitte mindestens einen Modulnamen angeben.");
+        return;
+      }
+
+      let latestModules: BackupMiningModule[] | null = null;
+      const failures: string[] = [];
+
+      for (const name of moduleNames) {
+        const res = await fetch("/api/admin/items/mining-modules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, moduleType: miningModuleType })
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          failures.push(text ? `${name} (${res.status}: ${text})` : `${name} (${res.status})`);
+          continue;
+        }
+        latestModules = (await res.json()) as BackupMiningModule[];
+      }
+
+      if (latestModules) {
+        setMiningModuleName("");
+        setMiningModuleType("MINING_LASER");
+        setData((current) => current ? { ...current, backupMiningModules: latestModules ?? current.backupMiningModules } : current);
+      }
+
+      if (failures.length > 0) {
+        setError(`Einige Backup-Module konnten nicht angelegt werden: ${failures.join(", ")}`);
+      }
+    } finally {
+      setMiningModuleBusy(null);
+    }
+  }
+
+  async function saveMiningModuleBackup(id: string) {
+    setMiningModuleBusy(`save:${id}`);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/items/mining-modules", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, name: editMiningModuleName, moduleType: editMiningModuleType })
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setError(`Backup-Modul speichern fehlgeschlagen (${res.status}) ${text}`);
+        return;
+      }
+      const modules = (await res.json()) as BackupMiningModule[];
+      setEditingMiningModuleId(null);
+      setEditMiningModuleName("");
+      setEditMiningModuleType("MINING_LASER");
+      setData((current) => current ? { ...current, backupMiningModules: modules } : current);
+    } finally {
+      setMiningModuleBusy(null);
+    }
+  }
+
+  async function deleteMiningModuleBackup(id: string, name: string) {
+    if (!window.confirm(`Backup-Modul "${name}" wirklich loeschen?`)) return;
+    setMiningModuleBusy(`delete:${id}`);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/items/mining-modules", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id })
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        setError(`Backup-Modul loeschen fehlgeschlagen (${res.status}) ${text}`);
+        return;
+      }
+      const modules = (await res.json()) as BackupMiningModule[];
+      setData((current) => current ? { ...current, backupMiningModules: modules } : current);
+    } finally {
+      setMiningModuleBusy(null);
+    }
+  }
+
   const filteredItems = useMemo(
       () =>
         filterTree(
@@ -1017,6 +1130,8 @@ export default function ItemsPage() {
       resourcesOnly ||
     wantedAndCraftableOnly ||
     ownInventoryOnly;
+  const filteredVisibleItemCount = useMemo(() => countLeafItemNodes(filteredItems), [filteredItems]);
+  const effectiveCollapsedItemIds = hasFilters && filteredVisibleItemCount < 15 ? [] : collapsedItemIds;
 
   return (
     <main className="qb-main qb-items-page">
@@ -1242,7 +1357,7 @@ export default function ItemsPage() {
             quickCraftBusyId={quickCraftBusyId}
             draggedId={draggedItem?.id ?? null}
             moveBusyId={itemMoveBusyId}
-            collapsedIds={collapsedItemIds}
+            collapsedIds={effectiveCollapsedItemIds}
             onToggleCollapse={(nodeId) => setCollapsedItemIds((current) => toggleValue(current, nodeId))}
             onToggleCraft={(node) => void toggleCraftForNode(node)}
             onDragStart={setDraggedItem}
@@ -1256,35 +1371,89 @@ export default function ItemsPage() {
 
           {(canAdmin || canEdit) ? (
             <Card>
-          <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <h2 className="qb-card-title" style={{ margin: 0 }}>Verwaltung</h2>
-            <Button
-              type="button"
-              variant={adminSectionCollapsed ? "secondary" : "primary"}
-              onClick={() => setAdminSectionCollapsed((value) => !value)}
-            >
-              {adminSectionCollapsed ? "Verwaltung anzeigen" : "Verwaltung einklappen"}
-            </Button>
-          </div>
-          {!adminSectionCollapsed ? (
-            <>
-              {canAdmin ? (
+              <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <h2 className="qb-card-title" style={{ margin: 0 }}>Verwaltung</h2>
+                <Button
+                  type="button"
+                  variant={adminSectionCollapsed ? "secondary" : "primary"}
+                  onClick={() => setAdminSectionCollapsed((value) => !value)}
+                >
+                  {adminSectionCollapsed ? "Verwaltung anzeigen" : "Verwaltung einklappen"}
+                </Button>
+              </div>
+              {!adminSectionCollapsed ? (
                 <>
-                  <div className="qb-form">
-                    <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                      <strong>Item-Struktur</strong>
-                      <Button
-                        type="button"
-                        variant={itemEditMode ? "primary" : "secondary"}
-                        onClick={() => {
-                          setItemEditMode((value) => !value);
-                          setDraggedItem(null);
-                        }}
-                      >
-                        {itemEditMode ? "Bearbeiten beenden" : "Bearbeiten starten"}
-                      </Button>
-                    </div>
-                    <p className="qb-muted">Nur Admins duerfen die gemeinsame Item-Struktur per Drag and Drop veraendern.</p>
+                  {canAdmin ? (
+                    <>
+                      <div className="qb-form">
+                        <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                          <strong>Item-Struktur</strong>
+                          <Button
+                            type="button"
+                            variant={itemEditMode ? "primary" : "secondary"}
+                            onClick={() => {
+                              setItemEditMode((value) => !value);
+                              setDraggedItem(null);
+                            }}
+                          >
+                            {itemEditMode ? "Bearbeiten beenden" : "Bearbeiten starten"}
+                          </Button>
+                        </div>
+                        <p className="qb-muted">Nur Admins duerfen die gemeinsame Item-Struktur per Drag and Drop veraendern.</p>
+                      </div>
+                      <div className="qb-form">
+                        <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                          <strong>Loadout-Modul-Backups</strong>
+                        </div>
+                        <p className="qb-muted">Temporaere Backup-Module fuer Loadouts, getrennt nach Mining-Lasern und FPS-Waffen, solange sie noch nicht als craftbare Items importiert werden.</p>
+                        <form className="qb-form" onSubmit={createMiningModuleBackup}>
+                          <TextInput placeholder="Modulname oder mehrere Namen, komma-separiert" value={miningModuleName} onChange={(e) => setMiningModuleName(e.target.value)} required />
+                          <SelectInput value={miningModuleType} onChange={(e) => setMiningModuleType(e.target.value as "MINING_LASER" | "FPS_WEAPON")}>
+                            <option value="MINING_LASER">Mining-Laser</option>
+                            <option value="FPS_WEAPON">FPS-Waffe</option>
+                          </SelectInput>
+                          <p className="qb-muted">Mehrere Module koennen komma-separiert, mit Semikolon oder untereinander eingegeben werden.</p>
+                          <Button type="submit" variant="primary" disabled={miningModuleBusy !== null}>
+                            {miningModuleBusy === "create" ? "Speichert..." : "Modul(e) anlegen"}
+                          </Button>
+                        </form>
+                        {(data?.backupMiningModules ?? []).length === 0 ? (
+                          <p className="qb-muted">Noch keine Backup-Module angelegt.</p>
+                        ) : (
+                      <div className="qb-grid" style={{ gap: 8 }}>
+                        {(data?.backupMiningModules ?? []).map((module) => {
+                          const isEditing = editingMiningModuleId === module.id;
+                          return (
+                            <div key={module.id} className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                              {isEditing ? (
+                                <>
+                                  <TextInput value={editMiningModuleName} onChange={(e) => setEditMiningModuleName(e.target.value)} />
+                                  <SelectInput value={editMiningModuleType} onChange={(e) => setEditMiningModuleType(e.target.value as "MINING_LASER" | "FPS_WEAPON")}>
+                                    <option value="MINING_LASER">Mining-Laser</option>
+                                    <option value="FPS_WEAPON">FPS-Waffe</option>
+                                  </SelectInput>
+                                  <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap" }}>
+                                    <Button type="button" variant="primary" disabled={miningModuleBusy !== null} onClick={() => void saveMiningModuleBackup(module.id)}>Speichern</Button>
+                                    <Button type="button" variant="secondary" disabled={miningModuleBusy !== null} onClick={() => { setEditingMiningModuleId(null); setEditMiningModuleName(""); }}>Abbrechen</Button>
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap" }}>
+                                    <Badge label={module.name} />
+                                    <Badge label={module.moduleType === "FPS_WEAPON" ? "FPS-Waffe" : "Mining-Laser"} />
+                                  </div>
+                                  <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap" }}>
+                                    <Button type="button" variant="secondary" disabled={miningModuleBusy !== null} onClick={() => { setEditingMiningModuleId(module.id); setEditMiningModuleName(module.name); setEditMiningModuleType(module.moduleType); }}>Umbenennen</Button>
+                                    <Button type="button" variant="danger" disabled={miningModuleBusy !== null} onClick={() => void deleteMiningModuleBackup(module.id, module.name)}>Loeschen</Button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                   <div className="qb-form">
                     <div className="qb-inline" style={{ justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -1459,21 +1628,27 @@ export default function ItemsPage() {
                       onChange={(e) => setScmdbSourceURL(e.target.value)}
                     />
                     <div className="qb-inline">
-                      <Button type="button" variant="secondary" disabled={importBusy} onClick={() => void runSCMDBImport(true)}>
-                        {importBusy ? "Laeuft..." : "Preview laden"}
+                      <Button type="button" variant="secondary" disabled={importBusy} onClick={() => void runSCMDBImport(true, "live")}>
+                        {importBusy ? "Laeuft..." : "Preview live laden"}
                       </Button>
-                      <Button type="button" variant="primary" disabled={importBusy} onClick={() => void runSCMDBImport(false)}>
-                        {importBusy ? "Import laeuft..." : "Von SCMDB importieren"}
+                      <Button type="button" variant="secondary" disabled={importBusy} onClick={() => void runSCMDBImport(true, "default")}>
+                        {importBusy ? "Laeuft..." : "Preview default laden"}
+                      </Button>
+                      <Button type="button" variant="primary" disabled={importBusy} onClick={() => void runSCMDBImport(false, "live")}>
+                        {importBusy ? "Import laeuft..." : "Live von SCMDB importieren"}
+                      </Button>
+                      <Button type="button" variant="secondary" disabled={importBusy} onClick={() => void runSCMDBImport(false, "default")}>
+                        {importBusy ? "Import laeuft..." : "Default importieren"}
                       </Button>
                     </div>
                     {importError ? <p className="qb-error">{importError}</p> : null}
                     {importResult ? (
                       <div className="qb-form" style={{ gap: 8 }}>
                         <p className="qb-muted">
-                          Quelle {importResult.sourceBaseURL}, Version {importResult.version}, gefunden {importResult.totalDiscovered}.
+                          Quelle {importResult.sourceBaseURL}, Modus {importResult.sourceLabel}, Version {importResult.version}, gefunden {importResult.totalDiscovered}.
                         </p>
                         <p className="qb-muted">
-                          Eingefuegt {importResult.inserted}, uebersprungen {importResult.skipped}.
+                          Eingefuegt {importResult.inserted}, uebersprungen {importResult.skipped}. {importResult.snapshotUpdated ? "Lokaler Snapshot wurde aktualisiert." : ""}
                         </p>
                         <div className="qb-inline">
                           {Object.entries(importResult.sectionCounts).map(([section, count]) => (
@@ -1582,5 +1757,14 @@ export default function ItemsPage() {
     </main>
   );
 }
+
+
+
+
+
+
+
+
+
 
 
