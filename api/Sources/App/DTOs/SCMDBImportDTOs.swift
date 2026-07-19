@@ -5,6 +5,7 @@ struct SCMDBImportRequestDTO: Content {
     let dryRun: Bool?
     let sourceMode: String?
     let updateSnapshot: Bool?
+    let snapshotFile: File?
 }
 
 struct SCMDBImportPreviewItemDTO: Content {

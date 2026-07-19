@@ -55,6 +55,7 @@ struct LoadoutItemUpdateDTO: Content {
 struct LoadoutRequiredResourceDTO: Content {
     let resourceId: UUID
     let resourceName: String
+    let badges: [String]
     let quantity: Double
     let minimumStoredQuantity: Double
     let effectiveRequiredQuantity: Double
@@ -67,6 +68,7 @@ struct LoadoutRequiredResourceDTO: Content {
 struct LoadoutItemRecipeResourceDTO: Content {
     let resourceId: UUID
     let resourceName: String
+    let badges: [String]
     let slotName: String
     let quantity: Double
     let minQuality: Int?
@@ -114,3 +116,4 @@ struct LoadoutDetailDTO: Content {
 struct LoadoutListResponseDTO: Content {
     let loadouts: [LoadoutSummaryDTO]
 }
+

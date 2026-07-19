@@ -110,3 +110,26 @@ struct ItemSearchDetailResponseDTO: Content {
     let children: [ItemSearchChildSummaryDTO]
     let requests: [ItemSearchRequestResponseDTO]
 }
+struct ItemSearchOpenRequestOverviewDTO: Content {
+    let requestId: UUID
+    let itemId: UUID
+    let itemName: String
+    let itemCode: String?
+    let badges: [String]
+    let requesterUserId: UUID
+    let requesterUsername: String
+    let qty: Int
+    let averageQuality: String?
+    let note: String?
+    let hasResources: Bool
+    let hasRecipe: Bool
+    let crafterCount: Int
+    let totalQty: Int
+    let offerCount: Int
+    let createdAt: Date?
+}
+
+struct ItemSearchOpenRequestListResponseDTO: Content {
+    let requests: [ItemSearchOpenRequestOverviewDTO]
+}
+

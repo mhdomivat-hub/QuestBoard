@@ -379,6 +379,81 @@ func listMyInventoryMatches(_ req: Request) async throws -> [InventoryMatchRespo
     }
 }
 
+
+func listOpenItemSearchRequests(_ req: Request) async throws -> ItemSearchOpenRequestListResponseDTO {
+    _ = try requireItemSearchUser(req)
+
+    let openRequests = try await ItemSearchRequest.query(on: req.db)
+        .filter(\.$status == .open)
+        .all()
+    let items = try await Blueprint.query(on: req.db)
+        .filter(\.$category == .blueprints)
+        .all()
+    let users = try await User.query(on: req.db).all()
+    let offers = try await ItemSearchOffer.query(on: req.db).all()
+    let crafters = try await BlueprintCrafter.query(on: req.db).all()
+    let entries = try await StorageEntry.query(on: req.db).all()
+
+    let itemsById = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+        item.id.map { ($0, item) }
+    })
+    let usersById = Dictionary(uniqueKeysWithValues: users.compactMap { user in
+        user.id.map { ($0, user) }
+    })
+
+    var crafterCountsByItem: [UUID: Int] = [:]
+    for crafter in crafters {
+        crafterCountsByItem[crafter.$blueprint.id, default: 0] += 1
+    }
+
+    var totalQtyByItem: [UUID: Int] = [:]
+    for entry in entries {
+        totalQtyByItem[entry.$item.id, default: 0] += entry.qty
+    }
+
+    var offerCountByRequest: [UUID: Int] = [:]
+    for offer in offers {
+        offerCountByRequest[offer.$request.id, default: 0] += 1
+    }
+
+    let requestItems = openRequests.compactMap { request -> ItemSearchOpenRequestOverviewDTO? in
+        guard let requestId = request.id,
+              let item = itemsById[request.$item.id],
+              let itemId = item.id,
+              let requester = usersById[request.$user.id],
+              let requesterUserId = requester.id else {
+            return nil
+        }
+
+        let crafterCount = crafterCountsByItem[itemId] ?? 0
+        return .init(
+            requestId: requestId,
+            itemId: itemId,
+            itemName: item.name,
+            itemCode: item.itemCode,
+            badges: decodeItemSearchBadges(item.badgesCSV),
+            requesterUserId: requesterUserId,
+            requesterUsername: requester.username,
+            qty: request.qty,
+            averageQuality: request.averageQuality,
+            note: request.note,
+            hasResources: request.hasResources,
+            hasRecipe: crafterCount > 0,
+            crafterCount: crafterCount,
+            totalQty: totalQtyByItem[itemId] ?? 0,
+            offerCount: offerCountByRequest[requestId] ?? 0,
+            createdAt: request.createdAt
+        )
+    }.sorted {
+        let leftTime = $0.createdAt?.timeIntervalSince1970 ?? 0
+        let rightTime = $1.createdAt?.timeIntervalSince1970 ?? 0
+        if leftTime != rightTime { return leftTime > rightTime }
+        if $0.hasRecipe != $1.hasRecipe { return $0.hasRecipe && !$1.hasRecipe }
+        return $0.itemName.localizedCaseInsensitiveCompare($1.itemName) == .orderedAscending
+    }
+
+    return .init(requests: requestItems)
+}
 func createItemSearchOffer(_ req: Request) async throws -> ItemSearchDetailResponseDTO {
     let actor = try requireItemSearchUser(req)
     guard let requestModel = try await ItemSearchRequest.find(req.parameters.get("requestID"), on: req.db) else {
@@ -634,3 +709,4 @@ private func getItemSearchItemById(_ itemId: UUID?, on db: Database) async throw
         requests: requestDtos
     )
 }
+

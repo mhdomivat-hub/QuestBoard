@@ -222,15 +222,44 @@ private func writeSCMDBSnapshot(version: String, sourceBaseURL: String, crafting
         let url = URL(fileURLWithPath: localSCMDBSnapshotPath)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = try JSONEncoder().encode(snapshot)
-        try data.write(to: url, options: .atomic)
+        try data.write(to: url, options: Data.WritingOptions.atomic)
         return true
     } catch {
         req.logger.warning("SCMDB snapshot write failed: \(error.localizedDescription)")
         return false
     }
 }
+private func loadSCMDBUploadedSnapshot(file: File, req: Request, dryRun: Bool) throws -> (sourceBaseURL: String, version: String, craftingBlueprints: SCMDBCraftingBlueprintsPayload, craftingItems: SCMDBCraftingItemsPayload, sourceLabel: String, snapshotUpdated: Bool) {
+    let snapshot: SCMDBLocalSnapshot
+    do {
+        snapshot = try JSONDecoder().decode(SCMDBLocalSnapshot.self, from: dataByRemovingUTF8BOM(Data(buffer: file.data)))
+    } catch {
+        req.logger.error("SCMDB uploaded snapshot decode failed: \(error.localizedDescription)")
+        throw Abort(.badRequest, reason: "Hochgeladene SCMDB-Snapshot-Datei ist ungueltig")
+    }
 
-private func loadSCMDBSourceData(req: Request, sourceBaseURL: String, sourceMode: String?, updateSnapshot: Bool) async throws -> (version: String, craftingBlueprints: SCMDBCraftingBlueprintsPayload, craftingItems: SCMDBCraftingItemsPayload, sourceLabel: String, snapshotUpdated: Bool) {
+    let normalizedSourceBaseURL = (try? normalizeSCMDBBaseURL(snapshot.sourceBaseURL)) ?? defaultSCMDBBaseURL
+    let snapshotUpdated = !dryRun
+        ? writeSCMDBSnapshot(
+            version: snapshot.version,
+            sourceBaseURL: normalizedSourceBaseURL,
+            craftingBlueprints: snapshot.craftingBlueprints,
+            craftingItems: snapshot.craftingItems,
+            req: req
+        )
+        : false
+
+    return (
+        normalizedSourceBaseURL,
+        snapshot.version,
+        snapshot.craftingBlueprints,
+        snapshot.craftingItems,
+        "upload",
+        snapshotUpdated
+    )
+}
+
+private func loadSCMDBSourceData(req: Request, sourceBaseURL: String, sourceMode: String?, updateSnapshot: Bool) async throws -> (sourceBaseURL: String, version: String, craftingBlueprints: SCMDBCraftingBlueprintsPayload, craftingItems: SCMDBCraftingItemsPayload, sourceLabel: String, snapshotUpdated: Bool) {
     let normalizedMode = sourceMode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     let preferLive = normalizedMode == "live"
 
@@ -239,7 +268,8 @@ private func loadSCMDBSourceData(req: Request, sourceBaseURL: String, sourceMode
             let snapshotData = try Data(contentsOf: URL(fileURLWithPath: localSCMDBSnapshotPath))
             let snapshot = try JSONDecoder().decode(SCMDBLocalSnapshot.self, from: dataByRemovingUTF8BOM(snapshotData))
             req.logger.info("Using local SCMDB snapshot at \(localSCMDBSnapshotPath)")
-            return (snapshot.version, snapshot.craftingBlueprints, snapshot.craftingItems, "snapshot", false)
+            let normalizedSnapshotBaseURL = (try? normalizeSCMDBBaseURL(snapshot.sourceBaseURL)) ?? defaultSCMDBBaseURL
+            return (normalizedSnapshotBaseURL, snapshot.version, snapshot.craftingBlueprints, snapshot.craftingItems, "snapshot", false)
         } catch {
             req.logger.warning("Local SCMDB snapshot unreadable, falling back to live source: \(error.localizedDescription)")
         }
@@ -277,9 +307,8 @@ private func loadSCMDBSourceData(req: Request, sourceBaseURL: String, sourceMode
 
     let snapshotUpdated = updateSnapshot ? writeSCMDBSnapshot(version: selectedVersion.version, sourceBaseURL: sourceBaseURL, craftingBlueprints: craftingBlueprintsPayload, craftingItems: craftingItemsPayload, req: req) : false
 
-    return (selectedVersion.version, craftingBlueprintsPayload, craftingItemsPayload, "live", snapshotUpdated)
+    return (sourceBaseURL, selectedVersion.version, craftingBlueprintsPayload, craftingItemsPayload, "live", snapshotUpdated)
 }
-
 private func scmdbLookupKey(parentId: UUID?, name: String) -> String {
     let normalizedName = name
         .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
@@ -1053,10 +1082,19 @@ func importSCMDBItems(_ req: Request) async throws -> SCMDBImportResultDTO {
     let actor = try requireAdminOrSuperAdmin(req)
     let payload = try req.content.decode(SCMDBImportRequestDTO.self)
     let dryRun = payload.dryRun ?? false
-    let sourceBaseURL = try normalizeSCMDBBaseURL(payload.sourceBaseURL)
+    let normalizedSourceBaseURL = try normalizeSCMDBBaseURL(payload.sourceBaseURL)
     let updateSnapshot = payload.updateSnapshot ?? false
-    let sourceData = try await loadSCMDBSourceData(req: req, sourceBaseURL: sourceBaseURL, sourceMode: payload.sourceMode, updateSnapshot: updateSnapshot)
+    let normalizedMode = payload.sourceMode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
+    let sourceData: (sourceBaseURL: String, version: String, craftingBlueprints: SCMDBCraftingBlueprintsPayload, craftingItems: SCMDBCraftingItemsPayload, sourceLabel: String, snapshotUpdated: Bool)
+    if let snapshotFile = payload.snapshotFile, snapshotFile.data.readableBytes > 0 {
+        sourceData = try loadSCMDBUploadedSnapshot(file: snapshotFile, req: req, dryRun: dryRun)
+    } else {
+        if normalizedMode == "upload" {
+            throw Abort(.badRequest, reason: "Bitte eine SCMDB-Snapshot-Datei hochladen")
+        }
+        sourceData = try await loadSCMDBSourceData(req: req, sourceBaseURL: normalizedSourceBaseURL, sourceMode: payload.sourceMode, updateSnapshot: updateSnapshot)
+    }
     let itemMapByEntityClass = buildSCMDBCraftingItemIndex(from: sourceData.craftingItems.items)
     let craftingEntries = buildCraftingEntries(
         blueprints: sourceData.craftingBlueprints.blueprints,
@@ -1326,7 +1364,7 @@ func importSCMDBItems(_ req: Request) async throws -> SCMDBImportResultDTO {
             action: "scmdb.import",
             entityType: "storage_item",
             entityId: craftingSection.item.id,
-            details: "source=\(sourceBaseURL),mode=\(sourceData.sourceLabel),version=\(sourceData.version),inserted=\(inserted),skipped=\(skipped)"
+            details: "source=\(sourceData.sourceBaseURL),mode=\(sourceData.sourceLabel),version=\(sourceData.version),inserted=\(inserted),skipped=\(skipped)"
         )
     }
 
@@ -1336,7 +1374,7 @@ func importSCMDBItems(_ req: Request) async throws -> SCMDBImportResultDTO {
     )
 
     return .init(
-        sourceBaseURL: sourceBaseURL,
+        sourceBaseURL: sourceData.sourceBaseURL,
         version: sourceData.version,
         sourceLabel: sourceData.sourceLabel,
         snapshotUpdated: sourceData.snapshotUpdated,
@@ -1356,6 +1394,7 @@ func importSCMDBItems(_ req: Request) async throws -> SCMDBImportResultDTO {
         preview: Array(preview)
     )
 }
+
 
 
 

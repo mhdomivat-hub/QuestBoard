@@ -41,6 +41,7 @@ public func routes(_ app: Application) throws {
     authed.delete("storage", "locations", ":locationID", use: deleteStorageLocation)
     authed.get("item-search", use: listItemSearchItems)
     authed.get("item-search", "matches", "mine", use: listMyInventoryMatches)
+    authed.get("item-search", "requests", "open", use: listOpenItemSearchRequests)
     authed.get("item-search", ":itemID", use: getItemSearchItem)
     authed.post("item-search", ":itemID", "requests", use: createItemSearchRequest)
     authed.patch("item-search", "requests", ":requestID", "status", use: updateItemSearchRequestStatus)
@@ -113,6 +114,8 @@ public func routes(_ app: Application) throws {
         admin.delete("items", "mining-modules", use: deleteMiningModuleBackup)
     }
 }
+
+
 
 
 

@@ -50,6 +50,11 @@ private func decodeLoadoutBadges(_ raw: String?) -> [String] {
         .filter { !$0.isEmpty }
 }
 
+private func loadoutMineableBadges(_ raw: String?) -> [String] {
+    let allowed = Set(["Handminable", "Shipminable"])
+    return decodeLoadoutBadges(raw).filter { allowed.contains($0) }
+}
+
 private let defaultLoadoutMaterialMinQuality = 500
 
 private func normalizedLoadoutMaterialMinQuality(_ raw: Int?) -> Int {
@@ -124,6 +129,7 @@ private func normalizedModuleReferences(_ values: [LoadoutAssignedModuleReferenc
 private struct AggregatedLoadoutResource {
     let resourceId: UUID
     let resourceName: String
+    let badges: [String]
     let minQuality: Int?
     var quantity: Double
     var minimumStoredQuantity: Double
@@ -217,6 +223,7 @@ private func buildLoadoutDetail(
 
             let recipeDTOs = itemRecipes.map { recipe -> LoadoutItemRecipeResourceDTO in
                 let resourceId = recipe.$resource.id
+                let resourceBadges = loadoutMineableBadges(itemsById[resourceId]?.badgesCSV)
                 let totalStoredQty = (entriesByItemId[resourceId] ?? []).reduce(0) { $0 + $1.qty }
                 let normalizedMinQuality = normalizedLoadoutMaterialMinQuality(recipe.minQuality)
                 let targetKey = loadoutMaterialTargetKey(resourceId: resourceId, slotName: recipe.slotName, minQuality: recipe.minQuality)
@@ -227,6 +234,7 @@ private func buildLoadoutDetail(
                 var current = aggregatedByKey[aggregateKey] ?? AggregatedLoadoutResource(
                     resourceId: resourceId,
                     resourceName: recipe.resourceName,
+                    badges: resourceBadges,
                     minQuality: effectiveMinQuality,
                     quantity: 0,
                     minimumStoredQuantity: 0,
@@ -239,6 +247,7 @@ private func buildLoadoutDetail(
                 return LoadoutItemRecipeResourceDTO(
                     resourceId: resourceId,
                     resourceName: recipe.resourceName,
+                    badges: resourceBadges,
                     slotName: recipe.slotName,
                     quantity: recipe.quantity,
                     minQuality: effectiveMinQuality,
@@ -273,6 +282,7 @@ private func buildLoadoutDetail(
             return LoadoutRequiredResourceDTO(
                 resourceId: resource.resourceId,
                 resourceName: resource.resourceName,
+                badges: resource.badges,
                 quantity: resource.quantity,
                 minimumStoredQuantity: resource.minimumStoredQuantity,
                 effectiveRequiredQuantity: effectiveRequiredQuantity,
@@ -609,6 +619,7 @@ func deleteLoadoutItem(_ req: Request) async throws -> LoadoutDetailDTO {
     await recordAuditEvent(on: req, actor: actor, action: "loadout.item.delete", entityType: "loadout", entityId: loadoutId, details: "loadoutItemId=\(loadoutItemId)")
     return try await getLoadoutDetailById(loadoutId, on: req.db)
 }
+
 
 
 

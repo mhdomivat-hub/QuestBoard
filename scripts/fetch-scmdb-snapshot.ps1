@@ -6,7 +6,19 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Get-Json($Url) {
-  Invoke-RestMethod -Method Get -Uri $Url
+  $tempFile = [System.IO.Path]::GetTempFileName()
+  try {
+    & curl.exe --fail --silent --show-error --location --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 -H "Accept: application/json" -A "QuestBoard-SCMDB-Fetch/1.0" $Url -o $tempFile
+    if ($LASTEXITCODE -ne 0) {
+      throw "curl fehlgeschlagen fuer $Url"
+    }
+
+    $raw = Get-Content -Path $tempFile -Raw -Encoding UTF8
+    return $raw | ConvertFrom-Json
+  }
+  finally {
+    Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
+  }
 }
 
 $normalizedBase = $BaseUrl.TrimEnd("/")
@@ -17,6 +29,9 @@ if (-not $versions -or $versions.Count -eq 0) {
 
 $selectedVersion = $versions[0]
 $version = $selectedVersion.version
+if (-not $version) {
+  throw "SCMDB versions.json enthaelt keine gueltige Version."
+}
 Write-Host "Nutze SCMDB-Version $version"
 
 $craftingBlueprints = Get-Json "$normalizedBase/data/crafting_blueprints-$version.json"

@@ -41,6 +41,7 @@ type LoadoutListResponse = { loadouts: LoadoutSummary[] };
 type LoadoutItemRecipeResource = {
   resourceId: string;
   resourceName: string;
+  badges: string[];
   slotName: string;
   quantity: number;
   minQuality?: number | null;
@@ -90,6 +91,7 @@ type LoadoutItem = {
 type LoadoutRequiredResource = {
   resourceId: string;
   resourceName: string;
+  badges: string[];
   quantity: number;
   minimumStoredQuantity: number;
   effectiveRequiredQuantity: number;
@@ -709,7 +711,10 @@ export default function LoadoutsPage() {
                                   <div className="qb-grid" style={{ gap: 8, marginTop: 10 }}>
                                     {item.recipeResources.map((resource) => (
                                       <div key={`${item.id}-${resource.resourceId}-${resource.slotName}`} style={{ border: "1px solid rgba(199,205,214,0.12)", borderRadius: 10, padding: 10 }}>
-                                        <strong>{resource.slotName}: {resource.resourceName}</strong>
+                                        <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap" }}>
+                                          <strong>{resource.slotName}: {resource.resourceName}</strong>
+                                          {resource.badges.map((badge) => <Badge key={`${item.id}-${resource.resourceId}-${resource.slotName}-${badge}`} label={badge} />)}
+                                        </div>
                                         <div className="qb-muted">Crafting {formatNumber(resource.quantity)}{resource.minQuality !== null && resource.minQuality !== undefined ? ` | MinQ ${resource.minQuality}` : ""}</div>
                                         {editMode ? (
                                           <TextInput
@@ -751,7 +756,10 @@ export default function LoadoutsPage() {
                         <div className="qb-grid" style={{ gap: 8 }}>
                           {selectedLoadout.requiredResources.map((resource) => (
                             <div key={`${resource.resourceId}-${resource.minQuality ?? "any"}`} style={{ borderBottom: "1px solid rgba(199,205,214,0.12)", paddingBottom: 8 }}>
-                              <strong>{resource.resourceName}</strong>
+                              <div className="qb-inline" style={{ gap: 8, flexWrap: "wrap" }}>
+                                <strong>{resource.resourceName}</strong>
+                                {resource.badges.map((badge) => <Badge key={`${resource.resourceId}-${resource.minQuality ?? "any"}-${badge}`} label={badge} />)}
+                              </div>
                               <div className="qb-muted">Crafting {formatNumber(resource.quantity)}{resource.minQuality !== null && resource.minQuality !== undefined ? ` | MinQ ${resource.minQuality}` : ""}</div>
                               
                             </div>
@@ -771,6 +779,7 @@ export default function LoadoutsPage() {
     </main>
   );
 }
+
 
 
 

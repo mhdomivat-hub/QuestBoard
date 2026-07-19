@@ -15,6 +15,14 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 NORMALIZED_BASE="${BASE_URL%/}"
+CURL_UA="QuestBoard-SCMDB-Fetch/1.0"
+CURL_ARGS=(--fail --silent --show-error --location --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 -H "Accept: application/json" -A "$CURL_UA")
+
+fetch_json() {
+  local url="$1"
+  local output="$2"
+  curl "${CURL_ARGS[@]}" "$url" -o "$output"
+}
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -23,7 +31,7 @@ VERSIONS_PATH="$TMP_DIR/versions.json"
 BLUEPRINTS_PATH="$TMP_DIR/crafting_blueprints.json"
 ITEMS_PATH="$TMP_DIR/crafting_items.json"
 
-curl -fsSL "$NORMALIZED_BASE/data/versions.json" -o "$VERSIONS_PATH"
+fetch_json "$NORMALIZED_BASE/data/versions.json" "$VERSIONS_PATH"
 
 VERSION="$(python3 - "$VERSIONS_PATH" <<'PY'
 import json
@@ -46,8 +54,8 @@ PY
 
 echo "Nutze SCMDB-Version $VERSION"
 
-curl -fsSL "$NORMALIZED_BASE/data/crafting_blueprints-$VERSION.json" -o "$BLUEPRINTS_PATH"
-curl -fsSL "$NORMALIZED_BASE/data/crafting_items-$VERSION.json" -o "$ITEMS_PATH"
+fetch_json "$NORMALIZED_BASE/data/crafting_blueprints-$VERSION.json" "$BLUEPRINTS_PATH"
+fetch_json "$NORMALIZED_BASE/data/crafting_items-$VERSION.json" "$ITEMS_PATH"
 
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 

@@ -563,6 +563,7 @@ export default function ItemsPage() {
   const [locationParentId, setLocationParentId] = useState("");
   const [moveOwnInventoryLocationId, setMoveOwnInventoryLocationId] = useState("");
   const [scmdbSourceURL, setScmdbSourceURL] = useState("https://scmdb.net/?page=fab");
+  const [scmdbSnapshotFile, setScmdbSnapshotFile] = useState<File | null>(null);
   const [scmdbSourceMode, setScmdbSourceMode] = useState<"snapshot" | "live">("snapshot");
   const [scmdbUpdateSnapshot, setScmdbUpdateSnapshot] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
@@ -843,20 +844,35 @@ export default function ItemsPage() {
     }
   }
 
-  async function runSCMDBImport(dryRun: boolean, sourceMode: "live" | "default" = "live") {
+  async function runSCMDBImport(dryRun: boolean, sourceMode: "live" | "default" | "upload" = "live") {
+    if (sourceMode === "upload" && !scmdbSnapshotFile) {
+      setImportError("Bitte zuerst eine SCMDB-Snapshot-Datei auswaehlen.");
+      setImportResult(null);
+      return;
+    }
+
     setImportBusy(true);
     setImportError(null);
     setImportResult(null);
     try {
-      const res = await fetch("/api/admin/items/import-scmdb", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const requestInit: RequestInit = { method: "POST" };
+      if (sourceMode === "upload") {
+        const formData = new FormData();
+        formData.append("sourceBaseURL", scmdbSourceURL || "https://scmdb.net");
+        formData.append("dryRun", String(dryRun));
+        formData.append("sourceMode", sourceMode);
+        formData.append("snapshotFile", scmdbSnapshotFile as File);
+        requestInit.body = formData;
+      } else {
+        requestInit.headers = { "Content-Type": "application/json" };
+        requestInit.body = JSON.stringify({
           sourceBaseURL: scmdbSourceURL || null,
           dryRun,
           sourceMode
-        })
-      });
+        });
+      }
+
+      const res = await fetch("/api/admin/items/import-scmdb", requestInit);
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -1276,8 +1292,13 @@ export default function ItemsPage() {
 
         <div className="qb-items-content">
           <div className="qb-items-heading">
-            <h1 className="qb-page-title">Items</h1>
-            <p className="qb-muted">Filter, Lager, Suche und Crafting laufen hier in einer gemeinsamen Uebersicht zusammen.</p>
+            <div className="qb-inline" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <h1 className="qb-page-title">Items</h1>
+                <p className="qb-muted">Filter, Lager, Suche und Crafting laufen hier in einer gemeinsamen Uebersicht zusammen.</p>
+              </div>
+              <a href="/item-requests" className="qb-nav-link">Offene Requests</a>
+            </div>
           </div>
 
           {inventoryMatches.length > 0 ? (
@@ -1622,11 +1643,28 @@ export default function ItemsPage() {
                   </div>
                   <div className="qb-form">
                     <strong>SCMDB Import</strong>
+                    <p className="qb-muted">
+                      Wenn SCMDB Server-Requests blockiert, kannst du hier eine bereits geladene Snapshot-JSON direkt hochladen und fuer Preview oder Import verwenden.
+                    </p>
                     <TextInput
                       placeholder="https://scmdb.net/?page=fab"
                       value={scmdbSourceURL}
                       onChange={(e) => setScmdbSourceURL(e.target.value)}
                     />
+                    <div className="qb-grid" style={{ gap: 8 }}>
+                      <label className="qb-muted" htmlFor="scmdb-snapshot-upload">Snapshot-JSON hochladen</label>
+                      <input
+                        id="scmdb-snapshot-upload"
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={(event) => setScmdbSnapshotFile(event.target.files?.[0] ?? null)}
+                      />
+                      {scmdbSnapshotFile ? (
+                        <div className="qb-muted">Ausgewaehlt: {scmdbSnapshotFile.name}</div>
+                      ) : (
+                        <div className="qb-muted">Keine Snapshot-Datei ausgewaehlt.</div>
+                      )}
+                    </div>
                     <div className="qb-inline">
                       <Button type="button" variant="secondary" disabled={importBusy} onClick={() => void runSCMDBImport(true, "live")}>
                         {importBusy ? "Laeuft..." : "Preview live laden"}
@@ -1634,11 +1672,17 @@ export default function ItemsPage() {
                       <Button type="button" variant="secondary" disabled={importBusy} onClick={() => void runSCMDBImport(true, "default")}>
                         {importBusy ? "Laeuft..." : "Preview default laden"}
                       </Button>
+                      <Button type="button" variant="secondary" disabled={importBusy || !scmdbSnapshotFile} onClick={() => void runSCMDBImport(true, "upload")}>
+                        {importBusy ? "Laeuft..." : "Preview Upload laden"}
+                      </Button>
                       <Button type="button" variant="primary" disabled={importBusy} onClick={() => void runSCMDBImport(false, "live")}>
                         {importBusy ? "Import laeuft..." : "Live von SCMDB importieren"}
                       </Button>
                       <Button type="button" variant="secondary" disabled={importBusy} onClick={() => void runSCMDBImport(false, "default")}>
                         {importBusy ? "Import laeuft..." : "Default importieren"}
+                      </Button>
+                      <Button type="button" variant="primary" disabled={importBusy || !scmdbSnapshotFile} onClick={() => void runSCMDBImport(false, "upload")}>
+                        {importBusy ? "Import laeuft..." : "Upload importieren"}
                       </Button>
                     </div>
                     {importError ? <p className="qb-error">{importError}</p> : null}
@@ -1757,6 +1801,7 @@ export default function ItemsPage() {
     </main>
   );
 }
+
 
 
 
