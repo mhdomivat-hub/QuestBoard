@@ -140,6 +140,36 @@ private func normalizeSCMDBBaseURL(_ raw: String?) throws -> String {
     return normalized
 }
 
+private func fetchRemoteDataWithCurl(from url: URL, req: Request, context: String) throws -> Data {
+    let process = Process()
+    let outputPipe = Pipe()
+    let errorPipe = Pipe()
+
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+    process.arguments = ["-fsSL", "-H", "Accept: application/json", url.absoluteString]
+    process.standardOutput = outputPipe
+    process.standardError = errorPipe
+
+    try process.run()
+    process.waitUntilExit()
+
+    let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+
+    guard process.terminationStatus == 0 else {
+        let errorText = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "curl failed"
+        req.logger.error("\(context) curl fallback failed: \(errorText)")
+        throw Abort(.badGateway, reason: "\(context) konnte nicht geladen werden")
+    }
+
+    guard !data.isEmpty else {
+        req.logger.error("\(context) curl fallback returned empty body")
+        throw Abort(.badGateway, reason: "\(context) lieferte keine Daten")
+    }
+
+    return data
+}
+
 private func fetchRemoteData(from urlString: String, req: Request, context: String) async throws -> Data {
     guard let url = URL(string: urlString) else {
         throw Abort(.badRequest, reason: "\(context) URL ist ungueltig")
@@ -147,22 +177,20 @@ private func fetchRemoteData(from urlString: String, req: Request, context: Stri
 
     do {
         let response = try await req.client.get(URI(string: url.absoluteString))
-        guard response.status == .ok else {
-            req.logger.error("\(context) returned status \(response.status.code)")
-            throw Abort(.badGateway, reason: "\(context) lieferte Status \(response.status.code)")
+        if response.status == .ok {
+            let data = response.body.map { Data(buffer: $0) } ?? Data()
+            guard !data.isEmpty else {
+                req.logger.error("\(context) returned empty body")
+                throw Abort(.badGateway, reason: "\(context) lieferte keine Daten")
+            }
+            return data
         }
 
-        let data = response.body.map { Data(buffer: $0) } ?? Data()
-        guard !data.isEmpty else {
-            req.logger.error("\(context) returned empty body")
-            throw Abort(.badGateway, reason: "\(context) lieferte keine Daten")
-        }
-        return data
-    } catch let abort as Abort {
-        throw abort
+        req.logger.warning("\(context) returned status \(response.status.code), trying curl fallback")
+        return try fetchRemoteDataWithCurl(from: url, req: req, context: context)
     } catch {
-        req.logger.error("\(context) request failed: \(error.localizedDescription)")
-        throw Abort(.badGateway, reason: "\(context) konnte nicht geladen werden")
+        req.logger.warning("\(context) request failed: \(error.localizedDescription), trying curl fallback")
+        return try fetchRemoteDataWithCurl(from: url, req: req, context: context)
     }
 }
 
